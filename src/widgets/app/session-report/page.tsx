@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { useApp } from '@modelcontextprotocol/ext-apps/react';
 import { useTheme, useWidgetSDK, WidgetLayout } from '@nitrostack/widgets';
 
 type VitalItem = {
@@ -34,12 +35,14 @@ export default function SessionReportWidget() {
 }
 
 function SessionReportContent() {
-  const { isReady, getToolOutput } = useWidgetSDK();
-  const theme = useTheme();
+  const { isReady: isNitroReady, getToolOutput } = useWidgetSDK();
+  const nitroTheme = useTheme();
+  const mcp = useMcpAppReport();
   const [scrubberMs, setScrubberMs] = useState<number | null>(null);
+  const report = mcp.report ?? (isNitroReady ? getToolOutput<Report>() : null);
+  const theme = mcp.theme ?? nitroTheme;
 
-  if (!isReady) return <Shell dark={theme === 'dark'}>Aligning evidence...</Shell>;
-  const report = getToolOutput<Report>();
+  if (!isNitroReady && !mcp.hasResult) return <Shell dark={theme === 'dark'}>Aligning evidence...</Shell>;
   if (!report) return <Shell dark={theme === 'dark'}>No report data available.</Shell>;
 
   const vitals = report.timeline.filter((item): item is VitalItem => item.kind === 'vital');
@@ -121,6 +124,66 @@ function SessionReportContent() {
       </div>
     </Shell>
   );
+}
+
+function useMcpAppReport(): {
+  report: Report | null;
+  hasResult: boolean;
+  theme: 'light' | 'dark' | null;
+} {
+  const [report, setReport] = useState<Report | null>(null);
+  const [hasResult, setHasResult] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark' | null>(null);
+  const { app, isConnected } = useApp({
+    appInfo: { name: 'Pulse session report', version: '0.2.0' },
+    capabilities: {},
+    onAppCreated: (createdApp) => {
+      createdApp.addEventListener('toolresult', (result) => {
+        setReport(reportFromToolResult(result));
+        setHasResult(true);
+      });
+      createdApp.addEventListener('hostcontextchanged', (context) => {
+        if (context.theme) setTheme(context.theme);
+      });
+    }
+  });
+
+  useEffect(() => {
+    if (!app || !isConnected) return;
+    const hostTheme = app.getHostContext()?.theme;
+    if (hostTheme) setTheme(hostTheme);
+  }, [app, isConnected]);
+
+  return { report, hasResult, theme };
+}
+
+function reportFromToolResult(result: { structuredContent?: unknown; content?: unknown }): Report | null {
+  if (isReport(result.structuredContent)) return result.structuredContent;
+  if (!Array.isArray(result.content)) return null;
+
+  const textBlock = result.content.find((item) =>
+    isRecord(item) && item.type === 'text' && typeof item.text === 'string');
+  if (!isRecord(textBlock) || typeof textBlock.text !== 'string') return null;
+
+  try {
+    const parsed: unknown = JSON.parse(textBlock.text);
+    return isReport(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isReport(value: unknown): value is Report {
+  return isRecord(value) &&
+    isRecord(value.session) &&
+    typeof value.durationMs === 'number' &&
+    isRecord(value.summary) &&
+    Array.isArray(value.timeline) &&
+    Array.isArray(value.limitations);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function Shell({ dark, children }: { dark: boolean; children: ReactNode }) {
