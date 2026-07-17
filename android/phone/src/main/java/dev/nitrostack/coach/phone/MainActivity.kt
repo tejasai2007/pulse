@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
                 "${it.toInt()} BPM - ${if (stale) "STALE" else "LIVE"} - ${vitals.source}"
             } ?: "No heart-rate reading")
             Text("Sensor: ${vitals.availability}")
+            Text("Exercise mode: ${if (vitals.exerciseMode) "on" else "off"}")
             Text("Watch: ${if (vitals.watchConnected) "connected" else "offline"} | Backend: ${if (vitals.backendConnected) "connected" else "offline"}")
             Text("Upload queue: ${vitals.pendingEvents} | ${vitals.message}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -86,6 +87,10 @@ class MainActivity : ComponentActivity() {
                     enabled = vitals.sessionStatus in setOf("calibrating", "active")
                 ) { Text("End session") }
             }
+            Button(
+                onClick = pipeline::toggleExerciseMode,
+                enabled = vitals.sessionStatus in setOf("calibrating", "active")
+            ) { Text(if (vitals.exerciseMode) "Stop exercise mode" else "Start exercise mode") }
             if (BuildConfig.DEBUG && BuildConfig.VITALS_SOURCE == "simulated") {
                 Button(onClick = { if (vitals.simulatorRunning) pipeline.stopSimulator() else pipeline.startSimulator() }) {
                     Text(if (vitals.simulatorRunning) "Stop simulator" else "Run simulated sequence")

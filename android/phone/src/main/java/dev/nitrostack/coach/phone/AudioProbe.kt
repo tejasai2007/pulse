@@ -60,8 +60,8 @@ class AudioProbe(
         else state.value = state.value.copy(status = "TTS initialization failed")
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-            override fun onError(utteranceId: String?) { if (utteranceId == "phase-zero-resume") resumeAfterTts() }
-            override fun onDone(utteranceId: String?) { if (utteranceId == "phase-zero-resume") resumeAfterTts() }
+            override fun onError(utteranceId: String?) { if (utteranceId?.endsWith("-resume") == true) resumeAfterTts() }
+            override fun onDone(utteranceId: String?) { if (utteranceId?.endsWith("-resume") == true) resumeAfterTts() }
         })
     }
 
@@ -123,15 +123,23 @@ class AudioProbe(
     }
 
     fun speakProbe() {
+        speak("Take a breath. You are ready.", "phase-zero")
+    }
+
+    fun speakHighHeartRateAlert() {
+        speak("Your heart rate is high. Please stop, sit down, and take slow breaths. Seek medical help now if you have chest pain, severe shortness of breath, dizziness, or fainting.", "high-heart-rate-alert")
+    }
+
+    private fun speak(text: String, utteranceId: String) {
         val wasCapturing = captureJob != null
         stopCapture {
             tts.speak(
-                "Take a breath. You are ready.",
+                text,
                 TextToSpeech.QUEUE_FLUSH,
                 android.os.Bundle().apply {
                     putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
                 },
-                if (wasCapturing) "phase-zero-resume" else "phase-zero"
+                if (wasCapturing) "$utteranceId-resume" else utteranceId
             )
             state.value = state.value.copy(status = "Playing TTS through ${state.value.route}")
         }

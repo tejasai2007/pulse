@@ -19,10 +19,10 @@ class PulseApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        vitalPipeline = VitalPipeline(this)
         audioProbe = AudioProbe(this, applicationScope) { segment ->
             vitalPipeline.acceptTranscriptSegment(segment)
         }
+        vitalPipeline = VitalPipeline(this) { audioProbe.speakHighHeartRateAlert() }
     }
 
     fun startSession(): Boolean {

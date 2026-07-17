@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -29,6 +30,42 @@ import java.util.concurrent.TimeUnit
 
 private const val STALE_AFTER_MS = 10_000L
 private const val ACK_TIMEOUT_MS = 10_000L
+private const val HIGH_RESTING_HEART_RATE_BPM = 160.0
+private const val HIGH_HEART_RATE_SUSTAINED_MS = 10_000L
+private const val HIGH_HEART_RATE_MAX_SAMPLE_GAP_MS = 5_000L
+private const val HIGH_HEART_RATE_ALERT_COOLDOWN_MS = 5 * 60_000L
+
+// Alerts require contiguous high readings so a delayed sensor update cannot trigger one.
+class HighHeartRateAlertGate {
+    private var elevatedSinceEpochMs: Long? = null
+    private var lastSampleEpochMs: Long? = null
+    private var lastAlertEpochMs: Long? = null
+
+    fun shouldAlert(bpm: Double, exerciseMode: Boolean, nowEpochMs: Long): Boolean {
+        if (exerciseMode || bpm <= HIGH_RESTING_HEART_RATE_BPM) {
+            elevatedSinceEpochMs = null
+            lastSampleEpochMs = nowEpochMs
+            return false
+        }
+        val sampleGap = lastSampleEpochMs?.let { nowEpochMs - it }
+        // Restart the sustained-reading window after a gap in sensor delivery.
+        if (sampleGap == null || sampleGap > HIGH_HEART_RATE_MAX_SAMPLE_GAP_MS) {
+            elevatedSinceEpochMs = nowEpochMs
+        }
+        lastSampleEpochMs = nowEpochMs
+        val elevatedSince = elevatedSinceEpochMs ?: nowEpochMs.also { elevatedSinceEpochMs = it }
+        if (nowEpochMs - elevatedSince < HIGH_HEART_RATE_SUSTAINED_MS) return false
+        if (lastAlertEpochMs?.let { nowEpochMs - it < HIGH_HEART_RATE_ALERT_COOLDOWN_MS } == true) return false
+        lastAlertEpochMs = nowEpochMs
+        return true
+    }
+
+    fun reset() {
+        elevatedSinceEpochMs = null
+        lastSampleEpochMs = null
+        lastAlertEpochMs = null
+    }
+}
 
 fun isReadingStale(receivedAtEpochMs: Long?, nowEpochMs: Long = System.currentTimeMillis()): Boolean =
     receivedAtEpochMs == null || nowEpochMs - receivedAtEpochMs > STALE_AFTER_MS
@@ -45,10 +82,14 @@ data class PhoneVitalsState(
     val backendConnected: Boolean = false,
     val pendingEvents: Int = 0,
     val simulatorRunning: Boolean = false,
+    val exerciseMode: Boolean = false,
     val message: String = "Start a session to capture vitals"
 )
 
-class VitalPipeline(private val context: Context) {
+class VitalPipeline(
+    private val context: Context,
+    private val onHighHeartRateAlert: () -> Unit = {}
+) {
     private val prefs = context.getSharedPreferences("pulse_vital_pipeline", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val client = OkHttpClient.Builder().pingInterval(15, TimeUnit.SECONDS).build()
@@ -64,6 +105,7 @@ class VitalPipeline(private val context: Context) {
     private var reconnectAttempt = 0
     private var simulatorJob: Job? = null
     private var sessionStartElapsedRealtimeMs = restoreSessionStart()
+    private val highHeartRateAlertGate = HighHeartRateAlertGate()
 
     init {
         updateState { copy(pendingEvents = pending.size) }
@@ -75,6 +117,7 @@ class VitalPipeline(private val context: Context) {
         val sessionId = "android-${UUID.randomUUID()}"
         val now = Instant.now().toString()
         sessionStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
+        highHeartRateAlertGate.reset()
         val event = PulseContract.envelope(
             type = "session_started",
             sessionId = sessionId,
@@ -100,6 +143,7 @@ class VitalPipeline(private val context: Context) {
                 latestBpm = null,
                 latestReceivedAtEpochMs = null,
                 availability = "acquiring",
+                exerciseMode = false,
                 message = "Session started"
             )
         }
@@ -111,6 +155,7 @@ class VitalPipeline(private val context: Context) {
         val sessionId = mutableState.value.sessionId ?: return
         if (mutableState.value.sessionStatus !in setOf("calibrating", "active")) return
         stopSimulator()
+        highHeartRateAlertGate.reset()
         val endedAt = Instant.now().toString()
         enqueue(PulseContract.envelope(
             type = "session_ended",
@@ -118,7 +163,7 @@ class VitalPipeline(private val context: Context) {
             payload = JSONObject().put("endedAt", endedAt).put("reason", "completed")
         ))
         prefs.edit().putString("session_status", "completed").apply()
-        updateState { copy(sessionStatus = "completed", message = "Session ending; queued events will finish uploading") }
+        updateState { copy(sessionStatus = "completed", exerciseMode = false, message = "Session ending; queued events will finish uploading") }
         publishSessionState("completed")
     }
 
@@ -146,6 +191,18 @@ class VitalPipeline(private val context: Context) {
 
     fun reportMessage(message: String) {
         updateState { copy(message = message) }
+    }
+
+    fun toggleExerciseMode() {
+        if (mutableState.value.sessionStatus !in setOf("calibrating", "active")) return
+        // Changing activity context invalidates any partially accumulated alert window.
+        highHeartRateAlertGate.reset()
+        updateState {
+            copy(
+                exerciseMode = !exerciseMode,
+                message = if (!exerciseMode) "Exercise mode enabled; high-rate alerts paused" else "Exercise mode disabled; high-rate alerts active"
+            )
+        }
     }
 
     fun acceptWatchEvent(eventJson: String): Boolean {
@@ -226,9 +283,10 @@ class VitalPipeline(private val context: Context) {
 
     private fun acceptVitalEvent(event: JSONObject) {
         val payload = event.getJSONObject("payload")
+        val bpm = payload.getDouble("bpm")
         updateState {
             copy(
-                latestBpm = payload.getDouble("bpm"),
+                latestBpm = bpm,
                 availability = payload.getString("availability"),
                 source = payload.getString("source"),
                 latestSessionElapsedMs = payload.getLong("sessionElapsedMs"),
@@ -237,6 +295,19 @@ class VitalPipeline(private val context: Context) {
             )
         }
         enqueue(event)
+        if (highHeartRateAlertGate.shouldAlert(bpm, mutableState.value.exerciseMode, System.currentTimeMillis())) {
+            updateState { copy(message = "High heart rate alert sent: ${bpm.toInt()} BPM") }
+            sendHighHeartRateHaptic()
+            onHighHeartRateAlert()
+        }
+    }
+
+    private fun sendHighHeartRateHaptic() {
+        scope.launch {
+            // Reuse the established phone-to-watch command so vibration works without the watch UI open.
+            val nodes = Wearable.getNodeClient(context).connectedNodes.await()
+            nodes.forEach { Wearable.getMessageClient(context).sendMessage(it.id, "/phase0/haptic", byteArrayOf()).await() }
+        }
     }
 
     private fun enqueue(event: JSONObject) {
