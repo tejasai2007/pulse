@@ -31,6 +31,7 @@ android {
         buildConfigField("String", "AUDIO_INPUT", "\"${runtimeSetting("AUDIO_INPUT", "phone")}\"")
         buildConfigField("String", "TRANSCRIPTION_MODE", "\"${runtimeSetting("TRANSCRIPTION_MODE", "fixture")}\"")
         buildConfigField("String", "DEVICE_ACTIONS", "\"${runtimeSetting("DEVICE_ACTIONS", "simulated")}\"")
+        buildConfigField("Boolean", "COPILOT_ENABLED", runtimeSetting("COPILOT_ENABLED", "false"))
     }
 
     compileOptions {

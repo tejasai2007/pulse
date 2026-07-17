@@ -92,12 +92,16 @@ data class PhoneVitalsState(
     val pendingEvents: Int = 0,
     val simulatorRunning: Boolean = false,
     val exerciseMode: Boolean = false,
-    val message: String = "Start a session to capture vitals"
+    val message: String = "Start a session to capture vitals",
+    val copilotState: String = "completed",
+    val copilotConsented: Boolean = false
 )
 
 class VitalPipeline(
     private val context: Context,
-    private val onHighHeartRateAlert: () -> Unit = {}
+    private val onHighHeartRateAlert: () -> Unit = {},
+    private val onPlayTts: (String, String, (String) -> Unit) -> Unit = { _, _, _ -> },
+    private val onCancelTts: (String) -> Unit = {}
 ) {
     private val prefs = context.getSharedPreferences("pulse_vital_pipeline", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -132,7 +136,7 @@ class VitalPipeline(
             sessionId = sessionId,
             payload = JSONObject().put("session", JSONObject()
                 .put("sessionId", sessionId)
-                .put("status", "calibrating")
+                .put("status", "active")
                 .put("startedAt", now)
                 .put("endedAt", JSONObject.NULL)
                 .put("simulatedVitals", BuildConfig.VITALS_SOURCE == "simulated")
@@ -140,21 +144,24 @@ class VitalPipeline(
         )
         prefs.edit()
             .putString("session_id", sessionId)
-            .putString("session_status", "calibrating")
+            .putString("session_status", "active")
             .putLong("session_start_elapsed", sessionStartElapsedRealtimeMs)
             .putLong("session_start_wall", System.currentTimeMillis())
             .putLong("session_boot_epoch", System.currentTimeMillis() - SystemClock.elapsedRealtime())
+            .putBoolean("copilot_consented", false)
             .commit()
         updateState {
             copy(
                 sessionId = sessionId,
-                sessionStatus = "calibrating",
+                sessionStatus = "active",
                 latestBpm = null,
                 latestSessionElapsedMs = null,
                 latestWatchEventTimestamp = null,
                 latestReceivedAtEpochMs = null,
                 availability = "acquiring",
                 exerciseMode = false,
+                copilotConsented = false,
+                copilotState = "completed",
                 message = "Session started"
             )
         }
@@ -169,13 +176,14 @@ class VitalPipeline(
                 .put("grantedAt", now)
                 .put("revokedAt", JSONObject.NULL)
         ))
-        publishSessionState("calibrating")
+        publishSessionState("active")
     }
 
     fun endSession() {
         val sessionId = mutableState.value.sessionId ?: return
         if (mutableState.value.sessionStatus !in setOf("calibrating", "active")) return
         stopSimulator()
+        if (mutableState.value.copilotConsented) configureCopilot("", "", false)
         highHeartRateAlertGate.reset()
         val endedAt = Instant.now().toString()
         enqueue(PulseContract.envelope(
@@ -201,6 +209,7 @@ class VitalPipeline(
                 latestReceivedAtEpochMs = null,
                 availability = "inactive",
                 exerciseMode = false,
+                copilotConsented = false,
                 message = "Session ending; queued events will finish uploading"
             )
         }
@@ -297,6 +306,73 @@ class VitalPipeline(
             else -> return false
         }
         rememberWatchEvent(eventId)
+        return true
+    }
+
+    fun configureCopilot(situation: String, goal: String, enabled: Boolean) {
+        if (!BuildConfig.COPILOT_ENABLED) return
+        val sessionId = mutableState.value.sessionId ?: return
+        if (mutableState.value.sessionStatus != "active") return
+        val now = Instant.now().toString()
+        if (enabled) {
+            if (situation.isBlank() || goal.isBlank()) {
+                reportMessage("Enter a situation and goal before enabling copilot")
+                return
+            }
+            enqueue(PulseContract.envelope(
+                type = "session_context_updated",
+                sessionId = sessionId,
+                payload = JSONObject()
+                    .put("sessionId", sessionId)
+                    .put("wearerSummary", "")
+                    .put("situation", situation.trim())
+                    .put("participants", JSONArray())
+                    .put("goals", JSONArray().put(goal.trim()))
+                    .put("topicsToAvoid", JSONArray())
+                    .put("stressSensitivity", JSONObject()
+                        .put("baselineOffsetBpm", 12)
+                        .put("elevationTriggerMs", 5_000)
+                        .put("recoveryTriggerMs", 3_000)
+                        .put("cooldownMs", 10_000))
+            ))
+            prefs.edit().putString("copilot_granted_at", now).apply()
+        }
+        val grantedAt = if (enabled) now else prefs.getString("copilot_granted_at", now) ?: now
+        listOf("read:context", "read:transcript", "act:audio").forEach { scopeName ->
+            enqueue(PulseContract.envelope(
+                type = "consent_updated",
+                sessionId = sessionId,
+                payload = JSONObject()
+                    .put("grantId", "$sessionId-$scopeName")
+                    .put("sessionId", sessionId)
+                    .put("scope", scopeName)
+                    .put("grantedAt", grantedAt)
+                    .put("revokedAt", if (enabled) JSONObject.NULL else now)
+            ))
+        }
+        updateState {
+            copy(
+                copilotConsented = enabled,
+                message = if (enabled) "Copilot consent enabled for this session" else "Copilot consent revoked"
+            )
+        }
+        prefs.edit().putBoolean("copilot_consented", enabled).apply()
+    }
+
+    fun acceptAdviceRequest(eventJson: String): Boolean {
+        val event = runCatching { PulseContract.validateEnvelope(eventJson) }.getOrNull() ?: return false
+        if (event.getString("type") != "advice_requested") return false
+        val eventId = event.getString("eventId")
+        synchronized(lock) { if (eventId in processedWatchEvents) return true }
+        if (!BuildConfig.COPILOT_ENABLED) {
+            rememberWatchEvent(eventId)
+            return true
+        }
+        if (event.getString("sessionId") != mutableState.value.sessionId ||
+            mutableState.value.sessionStatus !in setOf("calibrating", "active")) return false
+        enqueue(event)
+        rememberWatchEvent(eventId)
+        updateCopilotState("requested", event)
         return true
     }
 
@@ -427,6 +503,10 @@ class VitalPipeline(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             val acknowledgement = try { JSONObject(text) } catch (_: Exception) { return }
+            if (acknowledgement.has("type")) {
+                handleBackendCommand(acknowledgement)
+                return
+            }
             val eventId = acknowledgement.optString("eventId")
             synchronized(lock) {
                 if (eventId != inFlightEventId) return
@@ -452,6 +532,46 @@ class VitalPipeline(
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = disconnected(webSocket)
 
         override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) = disconnected(webSocket)
+    }
+
+    private fun handleBackendCommand(event: JSONObject) {
+        val envelope = runCatching { PulseContract.validateEnvelope(event.toString()) }.getOrNull() ?: return
+        if (envelope.getString("sessionId") != mutableState.value.sessionId) return
+        val payload = envelope.getJSONObject("payload")
+        when (envelope.getString("type")) {
+            "copilot_state" -> updateCopilotState(payload.getString("state"), envelope)
+            "play_tts" -> {
+                val commandId = payload.getString("commandId")
+                if (Instant.parse(payload.getString("expiresAt")).isBefore(Instant.now())) {
+                    reportPlayback(commandId, "cancelled")
+                    return
+                }
+                onPlayTts(payload.getString("text"), commandId) { result -> reportPlayback(commandId, result) }
+            }
+            "cancel_tts" -> onCancelTts(payload.getString("commandId"))
+        }
+    }
+
+    private fun reportPlayback(commandId: String, result: String) {
+        val sessionId = mutableState.value.sessionId ?: return
+        enqueue(PulseContract.envelope(
+            type = "playback_completed",
+            sessionId = sessionId,
+            payload = JSONObject().put("commandId", commandId).put("result", result)
+        ))
+    }
+
+    private fun updateCopilotState(state: String, source: JSONObject) {
+        updateState { copy(copilotState = state, message = "Copilot $state") }
+        val sessionId = mutableState.value.sessionId ?: return
+        val requestId = source.optJSONObject("payload")?.optString("requestId").orEmpty()
+        if (requestId.isBlank()) return
+        val event = PulseContract.envelope(
+            type = "copilot_state",
+            sessionId = sessionId,
+            payload = JSONObject().put("requestId", requestId).put("state", state)
+        )
+        putWatchState(PulseDataLayer.COPILOT_STATE_PATH, event)
     }
 
     private fun disconnected(webSocket: WebSocket) {
@@ -546,7 +666,8 @@ class VitalPipeline(
     private fun restoredState() = PhoneVitalsState(
         sessionId = prefs.getString("session_id", null),
         sessionStatus = prefs.getString("session_status", "created") ?: "created",
-        pendingEvents = pending.size
+        pendingEvents = pending.size,
+        copilotConsented = prefs.getBoolean("copilot_consented", false)
     )
 
     private fun websocketUrl(): String = BuildConfig.BACKEND_URL.trimEnd('/')

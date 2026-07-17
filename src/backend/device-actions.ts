@@ -2,9 +2,11 @@ import type { WebSocket } from 'ws';
 import type { RuntimeConfig } from '../config.js';
 import type { InterventionActionResponse } from '../contracts/interventions.js';
 import type { PulseEvent } from '../contracts/events.js';
+import type { CopilotAdviceInput, CopilotAdviceResponse, CopilotRequest, PendingCopilotResponse } from '../contracts/copilot.js';
 import { EventStore, type PendingIntervention } from './event-store.js';
 
 const SAFE_SILENCE_MS = 1_500;
+const COPILOT_REQUEST_TTL_MS = 30_000;
 
 export class DeviceActions {
   private readonly sockets = new Set<WebSocket>();
@@ -77,12 +79,97 @@ export class DeviceActions {
     return this.currentResponse(action.commandId, false);
   }
 
+  claimCopilotRequest(): PendingCopilotResponse {
+    if (!this.config.COPILOT_ENABLED) return { request: null, duplicate: false };
+    const request = this.store.getRequestedCopilotRequest();
+    if (!request) return { request: null, duplicate: false };
+    if (Date.now() - Date.parse(request.requestedAt) >= COPILOT_REQUEST_TTL_MS) {
+      const expired = this.store.updateCopilotRequest(request.requestId, 'expired');
+      this.broadcastCopilotState(expired);
+      return { request: null, duplicate: false };
+    }
+    const thinking = this.store.updateCopilotRequest(request.requestId, 'thinking');
+    this.broadcastCopilotState(thinking);
+    return { request: thinking, duplicate: false };
+  }
+
+  copilotAdvice(input: CopilotAdviceInput & {
+    requestingAgentId: string;
+    expectedSessionId?: string;
+  }): CopilotAdviceResponse {
+    if (!this.config.COPILOT_ENABLED) throw new Error('Conversation Copilot is disabled');
+    const request = this.store.getCopilotRequest(input.requestId);
+    if (!request) throw new Error(`Unknown copilot request: ${input.requestId}`);
+    const session = this.requireActionableSession('act:audio');
+    this.requireExpectedSession(session.sessionId, input.expectedSessionId);
+    if (request.sessionId !== session.sessionId) throw new Error('Copilot request does not belong to the current session');
+    if (request.commandId && ['queued', 'playing', 'completed'].includes(request.state)) {
+      return { ...this.currentResponse(request.commandId, true), request };
+    }
+    if (request.state !== 'thinking' && request.state !== 'queued' && request.state !== 'playing') {
+      throw new Error(`Copilot request ${input.requestId} is not actionable (${request.state})`);
+    }
+    if (Date.now() - Date.parse(request.requestedAt) >= COPILOT_REQUEST_TTL_MS) {
+      const expired = this.store.updateCopilotRequest(request.requestId, 'expired');
+      this.broadcastCopilotState(expired);
+      throw new Error('Copilot request expired before advice was ready');
+    }
+    const unknownEvidence = input.triggerEvidenceIds.filter((id) => !this.store.hasCopilotEvidence(session.sessionId, id));
+    if (unknownEvidence.length > 0) throw new Error(`Unknown copilot evidence: ${unknownEvidence.join(', ')}`);
+    const action = this.store.createIntervention({
+      sessionId: session.sessionId,
+      type: 'copilot_advice',
+      idempotencyKey: request.requestId,
+      requestingAgentId: input.requestingAgentId,
+      triggerEvidenceIds: input.triggerEvidenceIds,
+      generatedMessage: input.text,
+      expiresAt: new Date(Date.now() + input.expiresInMs).toISOString()
+    });
+    if (!action.duplicate) {
+      const queued = this.store.updateCopilotRequest(request.requestId, 'queued', {
+        advice: input.text,
+        commandId: action.commandId
+      });
+      this.broadcastCopilotState(queued);
+      this.processWhisperQueue();
+    }
+    const current = this.store.getCopilotRequest(request.requestId)!;
+    return { ...this.currentResponse(action.commandId, action.duplicate), request: current };
+  }
+
   beforeIngest(event: PulseEvent): void {
     if (event.type !== 'consent_updated' || event.payload.revokedAt === null || event.payload.scope !== 'act:audio') return;
-    for (const pending of this.store.getPendingInterventions('whisper_coach')) {
+    for (const pending of this.store.getPendingAudioInterventions()) {
       if (pending.intervention.sessionId !== event.sessionId || pending.dispatchedAt === null) continue;
       this.broadcast(this.commandEvent(event.sessionId, 'cancel_tts', { commandId: pending.commandId }));
     }
+  }
+
+  afterIngest(event: PulseEvent, duplicate: boolean): void {
+    if (duplicate || !this.config.COPILOT_ENABLED) return;
+    if (event.type === 'advice_requested') {
+      const session = this.store.getSession(event.sessionId);
+      if (!session || session.status !== 'active') return;
+      const result = this.store.createCopilotRequest({
+        requestId: event.payload.requestId,
+        sessionId: event.sessionId,
+        sourceEventId: event.eventId,
+        requestedAt: event.timestamp
+      });
+      this.broadcastCopilotState(result.request);
+      return;
+    }
+    if (event.type === 'consent_updated' && event.payload.scope === 'act:audio' && event.payload.revokedAt !== null) {
+      const request = this.store.getActiveCopilotRequest(event.sessionId);
+      if (request?.commandId) {
+        const intervention = this.store.getInterventionByCommand(request.commandId)?.intervention;
+        if (intervention && intervention.deliveryResult !== 'pending') {
+          this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, 'cancelled', {}, event.timestamp));
+        }
+      }
+      return;
+    }
+    if (event.type === 'playback_completed') this.finishCopilotForCommand(event.payload.commandId, event.payload.result);
   }
 
   close(): void {
@@ -91,20 +178,31 @@ export class DeviceActions {
 
   private processWhisperQueue(): void {
     const now = Date.now();
-    for (const pending of this.store.getPendingInterventions('whisper_coach')) {
+    const activeCopilot = this.store.getCurrentSession()?.sessionId;
+    const staleRequest = activeCopilot ? this.store.getActiveCopilotRequest(activeCopilot) : undefined;
+    if (staleRequest && ['requested', 'thinking'].includes(staleRequest.state) &&
+      now - Date.parse(staleRequest.requestedAt) >= COPILOT_REQUEST_TTL_MS) {
+      this.broadcastCopilotState(this.store.updateCopilotRequest(staleRequest.requestId, 'expired'));
+    }
+    const pendingAudio = this.store.getPendingAudioInterventions();
+    if (pendingAudio.some(({ dispatchedAt }) => dispatchedAt !== null)) return;
+    for (const pending of pendingAudio) {
       if (pending.dispatchedAt !== null) continue;
       if (!pending.expiresAt || Date.parse(pending.expiresAt) <= now) {
         this.store.expireIntervention(pending.commandId);
+        this.finishCopilotForCommand(pending.commandId, 'cancelled', 'expired');
         continue;
       }
       const { sessionId } = pending.intervention;
       const session = this.store.getSession(sessionId);
       if (!session || session.status !== 'active' || !this.store.hasActiveConsent(sessionId, 'act:audio')) {
         this.store.completeCommand(pending.commandId, 'cancelled', new Date().toISOString());
+        this.finishCopilotForCommand(pending.commandId, 'cancelled');
         continue;
       }
       if (this.store.getConversationSilenceMs(sessionId, now) < SAFE_SILENCE_MS) continue;
       if (this.config.DEVICE_ACTIONS === 'simulated') {
+        this.markCopilotPlaying(pending.commandId);
         this.simulateCompletion(pending.commandId, sessionId, 'playback_completed', 'played');
         continue;
       }
@@ -116,6 +214,8 @@ export class DeviceActions {
         capturePolicy: 'pause'
       }));
       this.store.markInterventionDispatched(pending.commandId);
+      this.markCopilotPlaying(pending.commandId);
+      return;
     }
   }
 
@@ -157,9 +257,34 @@ export class DeviceActions {
       correlationId: crypto.randomUUID(),
       payload: { commandId, result }
     } as PulseEvent);
+    if (type === 'playback_completed') this.finishCopilotForCommand(commandId, result as 'played');
   }
 
-  private commandEvent<T extends 'send_watch_haptic' | 'play_tts' | 'cancel_tts'>(
+  private markCopilotPlaying(commandId: string): void {
+    const request = this.store.getCopilotRequestByCommand(commandId);
+    if (!request || request.state !== 'queued') return;
+    this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, 'playing'));
+  }
+
+  private finishCopilotForCommand(
+    commandId: string,
+    result: 'played' | 'cancelled' | 'failed',
+    override?: 'expired'
+  ): void {
+    const request = this.store.getCopilotRequestByCommand(commandId);
+    if (!request || !['queued', 'playing'].includes(request.state)) return;
+    const state = override ?? (result === 'played' ? 'completed' : result);
+    this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, state));
+  }
+
+  private broadcastCopilotState(request: CopilotRequest): void {
+    this.broadcast(this.commandEvent(request.sessionId, 'copilot_state', {
+      requestId: request.requestId,
+      state: request.state
+    }));
+  }
+
+  private commandEvent<T extends 'send_watch_haptic' | 'play_tts' | 'cancel_tts' | 'copilot_state'>(
     sessionId: string,
     type: T,
     payload: Extract<PulseEvent, { type: T }>['payload']

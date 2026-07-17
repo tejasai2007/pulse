@@ -13,7 +13,8 @@ data class WatchState(
     val sessionClockSynchronized: Boolean = false,
     val phoneConnected: Boolean = false,
     val backendConnected: Boolean = false,
-    val pendingEvents: Int = 0
+    val pendingEvents: Int = 0,
+    val copilotState: String = "completed"
 )
 
 data class HeartRateState(
@@ -40,7 +41,8 @@ object WatchStateStore {
             sessionStatus = prefs.getString("session_status", "created") ?: "created",
             sessionStartElapsedRealtimeMs = if (validMonotonicAnchor) prefs.getLong("session_start_elapsed", 0) else 0,
             sessionClockSynchronized = validMonotonicAnchor && prefs.getBoolean("session_clock_synchronized", false),
-            pendingEvents = prefs.getStringSet(PENDING, emptySet()).orEmpty().size
+            pendingEvents = prefs.getStringSet(PENDING, emptySet()).orEmpty().size,
+            copilotState = prefs.getString("copilot_state", "completed") ?: "completed"
         )
     }
 
@@ -94,6 +96,11 @@ object WatchStateStore {
             phoneConnected = phoneConnected ?: mutableState.value.phoneConnected,
             backendConnected = backendConnected ?: mutableState.value.backendConnected
         )
+    }
+
+    fun updateCopilotState(context: Context, state: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("copilot_state", state).apply()
+        mutableState.value = mutableState.value.copy(copilotState = state)
     }
 
     fun addPending(context: Context, eventId: String) = updatePending(context) { it + eventId }

@@ -16,10 +16,12 @@ import { deriveStressTimeline } from './stress-engine.js';
 import { deriveSpeechMetrics } from './speech-metrics.js';
 import { deriveSessionReport } from './session-report.js';
 import type { SessionReport } from '../contracts/session-report.js';
+import { copilotRequestSchema, type CopilotRequest, type CopilotState } from '../contracts/copilot.js';
 
 interface JsonRow { json: string }
 interface SearchRow { session_json: string; transcript_excerpt: string; rank: number }
 interface InterventionRow extends JsonRow { command_id: string; idempotency_key: string; expires_at: string | null; dispatched_at: string | null; pattern: string | null }
+interface CopilotRow extends JsonRow { source_event_id: string }
 
 export interface PendingIntervention {
   intervention: Intervention;
@@ -153,7 +155,7 @@ export class EventStore {
 
   createIntervention(input: {
     sessionId: string;
-    type: 'haptic_nudge' | 'whisper_coach';
+    type: 'haptic_nudge' | 'whisper_coach' | 'copilot_advice';
     idempotencyKey: string;
     requestingAgentId: string;
     triggerEvidenceIds: string[];
@@ -173,7 +175,7 @@ export class EventStore {
       requestingAgentId: input.requestingAgentId,
       generatedMessage: input.generatedMessage,
       requestedAt,
-      queuedAt: input.type === 'whisper_coach' ? requestedAt : null,
+      queuedAt: input.type === 'haptic_nudge' ? null : requestedAt,
       playedAt: null,
       dismissedAt: null,
       deliveryResult: 'pending'
@@ -197,6 +199,89 @@ export class EventStore {
       ORDER BY rowid
     `).all(...(type ? [type] : [])) as InterventionRow[];
     return rows.map((row) => this.pendingFromRow(row));
+  }
+
+  getPendingAudioInterventions(): readonly PendingIntervention[] {
+    const rows = this.database.prepare(`
+      SELECT json, command_id, idempotency_key, expires_at, dispatched_at, pattern
+      FROM interventions
+      WHERE json_extract(json, '$.deliveryResult') = 'pending'
+        AND type IN ('whisper_coach', 'copilot_advice')
+      ORDER BY rowid
+    `).all() as InterventionRow[];
+    return rows.map((row) => this.pendingFromRow(row));
+  }
+
+  createCopilotRequest(input: {
+    requestId: string;
+    sessionId: string;
+    sourceEventId: string;
+    requestedAt: string;
+  }): { request: CopilotRequest; duplicate: boolean } {
+    const exact = this.getCopilotRequest(input.requestId);
+    if (exact) return { request: exact, duplicate: true };
+    const active = this.getActiveCopilotRequest(input.sessionId);
+    if (active) return { request: active, duplicate: true };
+    const request = copilotRequestSchema.parse({
+      ...input,
+      updatedAt: input.requestedAt,
+      state: 'requested',
+      advice: null,
+      commandId: null
+    });
+    this.database.prepare(`
+      INSERT INTO copilot_requests (request_id, session_id, source_event_id, state, command_id, json)
+      VALUES (?, ?, ?, ?, NULL, ?)
+    `).run(request.requestId, request.sessionId, request.sourceEventId, request.state, JSON.stringify(request));
+    return { request, duplicate: false };
+  }
+
+  getCopilotRequest(requestId: string): CopilotRequest | undefined {
+    const row = this.database.prepare('SELECT json, source_event_id FROM copilot_requests WHERE request_id = ?')
+      .get(requestId) as CopilotRow | undefined;
+    return row ? copilotRequestSchema.parse(JSON.parse(row.json)) : undefined;
+  }
+
+  getActiveCopilotRequest(sessionId: string): CopilotRequest | undefined {
+    const row = this.database.prepare(`
+      SELECT json, source_event_id FROM copilot_requests
+      WHERE session_id = ? AND state IN ('requested', 'thinking', 'queued', 'playing')
+      ORDER BY rowid LIMIT 1
+    `).get(sessionId) as CopilotRow | undefined;
+    return row ? copilotRequestSchema.parse(JSON.parse(row.json)) : undefined;
+  }
+
+  getRequestedCopilotRequest(): CopilotRequest | undefined {
+    const row = this.database.prepare(`
+      SELECT json, source_event_id FROM copilot_requests WHERE state = 'requested' ORDER BY rowid LIMIT 1
+    `).get() as CopilotRow | undefined;
+    return row ? copilotRequestSchema.parse(JSON.parse(row.json)) : undefined;
+  }
+
+  getCopilotRequestByCommand(commandId: string): CopilotRequest | undefined {
+    const row = this.database.prepare('SELECT json, source_event_id FROM copilot_requests WHERE command_id = ?')
+      .get(commandId) as CopilotRow | undefined;
+    return row ? copilotRequestSchema.parse(JSON.parse(row.json)) : undefined;
+  }
+
+  updateCopilotRequest(
+    requestId: string,
+    state: CopilotState,
+    fields: { advice?: string; commandId?: string } = {},
+    at = new Date().toISOString()
+  ): CopilotRequest {
+    const current = this.getCopilotRequest(requestId);
+    if (!current) throw new Error(`Unknown copilot request: ${requestId}`);
+    const updated = copilotRequestSchema.parse({
+      ...current,
+      state,
+      updatedAt: at,
+      advice: fields.advice ?? current.advice,
+      commandId: fields.commandId ?? current.commandId
+    });
+    this.database.prepare('UPDATE copilot_requests SET state = ?, command_id = ?, json = ? WHERE request_id = ?')
+      .run(updated.state, updated.commandId, JSON.stringify(updated), requestId);
+    return updated;
   }
 
   getInterventionByCommand(commandId: string): PendingIntervention | undefined {
@@ -306,6 +391,14 @@ export class EventStore {
   getContext(sessionId: string): SessionContext | undefined {
     const row = this.database.prepare('SELECT json FROM session_contexts WHERE session_id = ?').get(sessionId) as JsonRow | undefined;
     return row ? sessionContextSchema.parse(JSON.parse(row.json)) : undefined;
+  }
+
+  hasCopilotEvidence(sessionId: string, evidenceId: string): boolean {
+    if (evidenceId === 'speech-metrics:current') return this.getSpeechMetrics(sessionId) !== undefined;
+    if (evidenceId === 'context:situation') return this.getContext(sessionId) !== undefined;
+    const goal = evidenceId.match(/^context:goal:(\d+)$/);
+    if (goal) return this.getContext(sessionId)?.goals[Number(goal[1])] !== undefined;
+    return this.getTranscriptSegments(sessionId).some(({ segmentId }) => segmentId === evidenceId);
   }
 
   getCurrentSession(): Session | undefined {
@@ -525,6 +618,15 @@ export class EventStore {
         UNIQUE(session_id, type, idempotency_key)
       );
       CREATE INDEX IF NOT EXISTS interventions_session_idx ON interventions(session_id, type);
+      CREATE TABLE IF NOT EXISTS copilot_requests (
+        request_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+        source_event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id) ON DELETE CASCADE,
+        state TEXT NOT NULL,
+        command_id TEXT UNIQUE,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS copilot_requests_active_idx ON copilot_requests(session_id, state);
       CREATE TABLE IF NOT EXISTS speech_metric_snapshots (
         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
         calculated_at_ms INTEGER NOT NULL,
@@ -623,6 +725,13 @@ export class EventStore {
       WHERE session_id = ? AND type = ? AND json_extract(json, '$.deliveryResult') = 'pending'
     `).all(sessionId, type) as Array<{ command_id: string }>;
     for (const row of rows) this.completeCommand(row.command_id, 'cancelled', at);
+    if (type === 'whisper_coach') {
+      const copilotRows = this.database.prepare(`
+        SELECT command_id FROM interventions
+        WHERE session_id = ? AND type = 'copilot_advice' AND json_extract(json, '$.deliveryResult') = 'pending'
+      `).all(sessionId) as Array<{ command_id: string }>;
+      for (const row of copilotRows) this.completeCommand(row.command_id, 'cancelled', at);
+    }
   }
 
   private storeAgentTranscript(intervention: Intervention, text: string, at: string, eventId: string): void {

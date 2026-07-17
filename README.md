@@ -1,6 +1,6 @@
 # Pulse
 
-Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Phase 5 adds deterministic stored-session reports and an MCP timeline widget that aligns heart rate with transcript evidence. The Phase 0 audio and haptic probes remain available for device validation.
+Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Conversation Copilot adds optional, watch-requested advice through the existing consent-gated audio path. The Phase 0 audio and haptic probes remain available for device validation.
 
 ## Components
 
@@ -49,6 +49,8 @@ npm run mock:events
 ```
 
 Sessions persist at `DATABASE_PATH=data/pulse.sqlite` by default. MCP agents can read `session://current/transcript`, `session://latest/transcript`, `session://current/speech-metrics`, `session://current/vitals`, and `session://current/stress`. They can call `search_sessions`, read `session://{sessionId}/report`, or call `generate_session_report` to render the synchronized report widget in a supporting MCP client.
+
+Set `COPILOT_ENABLED=true` for the backend, MCP server, phone, and watch builds to enable Conversation Copilot. On the phone, start a session, enter the conversation situation and one goal, then tap `Enable copilot` to grant `read:context`, `read:transcript`, and `act:audio` for that session. A watch `Ask copilot` tap creates one durable request. An MCP host runs `handle_copilot_request`, reads the three requested resources, and calls `copilot_advice`; advice is limited to 20 words and expires if it cannot reach a safe playback window.
 
 `session://current/vitals` returns the latest BPM, availability, source, freshness, and a rolling window capped at 30 samples. `session://current/stress` returns the backend-derived stress state, baseline, delta, elevation duration, and cooldown. Both resources require a current calibrating or active session and an active `read:vitals` consent grant; authenticated callers must also carry `read:vitals`, and session-bound callers must match the current session.
 

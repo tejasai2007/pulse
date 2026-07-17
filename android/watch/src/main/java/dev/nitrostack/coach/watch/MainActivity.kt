@@ -90,11 +90,19 @@ class MainActivity : ComponentActivity() {
             Text("Backend ${if (bridge.backendConnected) "connected" else "offline"}")
             Text("Session ${bridge.sessionStatus}")
             if (bridge.pendingEvents > 0) Text("${bridge.pendingEvents} reading(s) queued")
+            if (BuildConfig.COPILOT_ENABLED) Text("Copilot ${bridge.copilotState}")
             Button(
                 onClick = { sendSessionAction(if (bridge.sessionStatus in setOf("calibrating", "active")) "end" else "start") },
                 enabled = bridge.phoneConnected
             ) {
                 Text(if (bridge.sessionStatus in setOf("calibrating", "active")) "End session" else "Start session")
+            }
+            if (BuildConfig.COPILOT_ENABLED) {
+                Button(
+                    onClick = ::requestAdvice,
+                    enabled = bridge.phoneConnected && bridge.sessionStatus == "active" &&
+                        bridge.copilotState !in setOf("requested", "thinking", "queued", "playing")
+                ) { Text("Ask copilot") }
             }
         }
     }
@@ -113,6 +121,26 @@ class MainActivity : ComponentActivity() {
         Wearable.getDataClient(this).putDataItem(request).addOnSuccessListener {
             WatchStateStore.addPending(this, eventId)
             PulseLog.boundary("watch", "watch_to_phone", event, "Queued session action")
+        }
+    }
+
+    private fun requestAdvice() {
+        val eventId = UUID.randomUUID().toString()
+        val requestId = UUID.randomUUID().toString()
+        val sessionId = WatchStateStore.state.value.sessionId ?: return
+        val event = PulseContract.envelope(
+            type = "advice_requested",
+            sessionId = sessionId,
+            eventId = eventId,
+            payload = JSONObject().put("requestId", requestId)
+        )
+        val request = PutDataMapRequest.create(PulseDataLayer.adviceRequestPath(eventId)).apply {
+            dataMap.putString(PulseDataLayer.EVENT_JSON, event.toString())
+        }.asPutDataRequest().setUrgent()
+        Wearable.getDataClient(this).putDataItem(request).addOnSuccessListener {
+            WatchStateStore.addPending(this, eventId)
+            WatchStateStore.updateCopilotState(this, "requested")
+            PulseLog.boundary("watch", "watch_to_phone", event, "Queued advice request")
         }
     }
 

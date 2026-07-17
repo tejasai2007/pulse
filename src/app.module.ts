@@ -8,6 +8,7 @@ import { SpeechMetricsResources } from './speech-metrics.resources.js';
 import { InterventionTools } from './intervention.tools.js';
 import { SessionReportPrompts, SessionReportResources, SessionReportTools } from './session-report.mcp.js';
 import { CurrentSessionTools } from './current-session.tools.js';
+import { CopilotPrompts, CopilotResources, CopilotTools } from './copilot.mcp.js';
 
 @McpApp({
   module: AppModule,
@@ -25,6 +26,9 @@ import { CurrentSessionTools } from './current-session.tools.js';
     SessionReportPrompts,
     CurrentSessionTools,
     SessionTools,
+    CopilotResources,
+    CopilotTools,
+    CopilotPrompts,
     InterventionTools,
     PhaseZeroTools
   ],

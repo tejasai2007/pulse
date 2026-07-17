@@ -1,8 +1,17 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.isFile) file.inputStream().use(::load)
+}
+fun runtimeSetting(name: String, fallback: String) = localProperties.getProperty(name)
+    ?: providers.environmentVariable(name).getOrElse(fallback)
 
 android {
     namespace = "dev.nitrostack.coach.watch"
@@ -16,6 +25,7 @@ android {
         versionName = "0.1.0"
         buildConfigField("String", "VITALS_SOURCE", "\"watch\"")
         buildConfigField("String", "DEVICE_ACTIONS", "\"simulated\"")
+        buildConfigField("Boolean", "COPILOT_ENABLED", runtimeSetting("COPILOT_ENABLED", "false"))
     }
 
     compileOptions {

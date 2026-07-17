@@ -60,14 +60,16 @@ class AudioProbe(
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
     private var captureTimelineOffsetMs = 0L
+    private val completionCallbacks = mutableMapOf<String, (String) -> Unit>()
+    private var activeCommandId: String? = null
 
     override fun onInit(result: Int) {
         if (result == TextToSpeech.SUCCESS) tts.language = Locale.US
         else state.value = state.value.copy(status = "TTS initialization failed")
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-            override fun onError(utteranceId: String?) { if (utteranceId?.endsWith("-resume") == true) resumeAfterTts() }
-            override fun onDone(utteranceId: String?) { if (utteranceId?.endsWith("-resume") == true) resumeAfterTts() }
+            override fun onError(utteranceId: String?) = finishUtterance(utteranceId, "failed")
+            override fun onDone(utteranceId: String?) = finishUtterance(utteranceId, "played")
         })
     }
 
@@ -138,19 +140,41 @@ class AudioProbe(
         speak("Your heart rate is high. Please stop, sit down, and take slow breaths. Seek medical help now if you have chest pain, severe shortness of breath, dizziness, or fainting.", "high-heart-rate-alert")
     }
 
-    private fun speak(text: String, utteranceId: String) {
+    fun speakCommand(text: String, commandId: String, completed: (String) -> Unit) {
+        activeCommandId = commandId
+        speak(text, commandId, completed)
+    }
+
+    fun cancelCommand(commandId: String) {
+        if (activeCommandId != commandId) return
+        tts.stop()
+        activeCommandId = null
+        completionCallbacks.remove(commandId)?.invoke("cancelled")
+        completionCallbacks.remove("$commandId-resume")?.invoke("cancelled")
+    }
+
+    private fun speak(text: String, utteranceId: String, completed: ((String) -> Unit)? = null) {
         val wasCapturing = captureJob != null
         stopCapture {
+            val actualUtteranceId = if (wasCapturing) "$utteranceId-resume" else utteranceId
+            if (completed != null) completionCallbacks[actualUtteranceId] = completed
             tts.speak(
                 text,
                 TextToSpeech.QUEUE_FLUSH,
                 android.os.Bundle().apply {
                     putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
                 },
-                if (wasCapturing) "$utteranceId-resume" else utteranceId
+                actualUtteranceId
             )
             state.value = state.value.copy(status = "Playing TTS through ${state.value.route}")
         }
+    }
+
+    private fun finishUtterance(utteranceId: String?, result: String) {
+        if (utteranceId == null) return
+        completionCallbacks.remove(utteranceId)?.invoke(result)
+        activeCommandId = null
+        if (utteranceId.endsWith("-resume")) resumeAfterTts()
     }
 
     private fun resumeAfterTts() {

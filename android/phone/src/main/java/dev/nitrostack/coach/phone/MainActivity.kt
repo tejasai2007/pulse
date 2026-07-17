@@ -13,9 +13,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -60,6 +63,8 @@ class MainActivity : ComponentActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
             )
         }
+        var copilotSituation by remember { mutableStateOf("") }
+        var copilotGoal by remember { mutableStateOf("") }
         val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             permissionGranted = it[Manifest.permission.RECORD_AUDIO] == true && it[Manifest.permission.BLUETOOTH_CONNECT] == true
         }
@@ -73,7 +78,10 @@ class MainActivity : ComponentActivity() {
         }
         val stale = isReadingStale(vitals.latestReceivedAtEpochMs, now)
         val latestBpm = vitals.latestBpm
-        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             Text("Pulse vitals", style = MaterialTheme.typography.headlineMedium)
             if (BuildConfig.VITALS_SOURCE == "simulated") Text("SIMULATED VITALS", color = MaterialTheme.colorScheme.error)
             Text("Session: ${vitals.sessionStatus} ${vitals.sessionId.orEmpty()}")
@@ -83,6 +91,25 @@ class MainActivity : ComponentActivity() {
             Text("Exercise mode: ${if (vitals.exerciseMode) "on" else "off"}")
             Text("Watch: ${if (vitals.watchConnected) "connected" else "offline"} | Backend: ${if (vitals.backendConnected) "connected" else "offline"}")
             Text("Upload queue: ${vitals.pendingEvents} | ${vitals.message}")
+            if (BuildConfig.COPILOT_ENABLED) Text("Copilot: ${vitals.copilotState}")
+            if (BuildConfig.COPILOT_ENABLED) {
+                OutlinedTextField(
+                    value = copilotSituation,
+                    onValueChange = { copilotSituation = it },
+                    label = { Text("Conversation situation") },
+                    enabled = !vitals.copilotConsented
+                )
+                OutlinedTextField(
+                    value = copilotGoal,
+                    onValueChange = { copilotGoal = it },
+                    label = { Text("Point or goal to mention") },
+                    enabled = !vitals.copilotConsented
+                )
+                Button(
+                    onClick = { pipeline.configureCopilot(copilotSituation, copilotGoal, !vitals.copilotConsented) },
+                    enabled = vitals.sessionStatus == "active"
+                ) { Text(if (vitals.copilotConsented) "Disable copilot" else "Enable copilot") }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = application::startSession,

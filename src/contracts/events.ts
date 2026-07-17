@@ -7,6 +7,7 @@ import {
   transcriptSegmentSchema,
   vitalSampleSchema
 } from './domain.js';
+import { copilotStateSchema } from './copilot.js';
 
 export const CONTRACT_VERSION = '1.0' as const;
 
@@ -72,6 +73,9 @@ export const playbackCompletedEventSchema = event('playback_completed', z.object
   commandId: id,
   result: z.enum(['played', 'cancelled', 'failed'])
 }).strict());
+export const adviceRequestedEventSchema = event('advice_requested', z.object({
+  requestId: id
+}).strict());
 export const hapticCompletedEventSchema = event('haptic_completed', z.object({
   commandId: id,
   result: z.enum(['delivered', 'cancelled', 'failed'])
@@ -86,12 +90,17 @@ export const playTtsEventSchema = event('play_tts', z.object({
 export const cancelTtsEventSchema = event('cancel_tts', z.object({ commandId: id }).strict());
 export const sendWatchHapticEventSchema = event('send_watch_haptic', hapticCommandEventSchema.shape.payload);
 export const reportReadyEventSchema = event('report_ready', z.object({ reportId: id }).strict());
+export const copilotStateEventSchema = event('copilot_state', z.object({
+  requestId: id,
+  state: copilotStateSchema
+}).strict());
 
 export const pulseEventSchema = z.discriminatedUnion('type', [
   heartRateSampleEventSchema,
   heartRateAvailabilityEventSchema,
   watchStatusEventSchema,
   sessionActionEventSchema,
+  adviceRequestedEventSchema,
   sessionStateEventSchema,
   hapticCommandEventSchema,
   connectionStatusEventSchema,
@@ -107,7 +116,8 @@ export const pulseEventSchema = z.discriminatedUnion('type', [
   playTtsEventSchema,
   cancelTtsEventSchema,
   sendWatchHapticEventSchema,
-  reportReadyEventSchema
+  reportReadyEventSchema,
+  copilotStateEventSchema
 ]);
 export type PulseEvent = z.infer<typeof pulseEventSchema>;
 
