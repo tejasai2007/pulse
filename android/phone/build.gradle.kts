@@ -26,7 +26,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "DEEPGRAM_API_KEY", "\"$deepgramKey\"")
-        buildConfigField("String", "BACKEND_URL", "\"${runtimeSetting("BACKEND_URL", "http://10.78.84.145:8787")}\"")
+        buildConfigField("String", "BACKEND_URL", "\"${runtimeSetting("BACKEND_URL", "http://rlcraft.hrideshmg.com")}\"")
         buildConfigField("String", "VITALS_SOURCE", "\"${runtimeSetting("VITALS_SOURCE", "simulated")}\"")
         buildConfigField("String", "AUDIO_INPUT", "\"${runtimeSetting("AUDIO_INPUT", "phone")}\"")
         buildConfigField("String", "TRANSCRIPTION_MODE", "\"${runtimeSetting("TRANSCRIPTION_MODE", "fixture")}\"")

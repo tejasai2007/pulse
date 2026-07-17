@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.health.services.client.ExerciseUpdateCallback
@@ -51,6 +52,7 @@ class HeartRateService : Service() {
     private var callbackRegistered = false
     private var foregroundStarted = false
     private var trackedSessionId: String? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private val callback = object : ExerciseUpdateCallback {
         override fun onRegistered() = Unit
@@ -62,10 +64,11 @@ class HeartRateService : Service() {
         }
 
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
-            val bpm = update.latestMetrics.getData(DataType.HEART_RATE_BPM).lastOrNull()?.value
-            if (bpm != null && isTrackingCurrentSession()) {
-                WatchStateStore.updateHeartRate(bpm, "available", true)
-                sendReading(bpm)
+            if (isTrackingCurrentSession()) {
+                update.latestMetrics.getData(DataType.HEART_RATE_BPM).forEach { sample ->
+                    WatchStateStore.updateHeartRate(sample.value, "available", true)
+                    sendReading(sample.value)
+                }
             }
             if (update.exerciseStateInfo.state.isEnded && isTrackingCurrentSession()) {
                 reportUnavailable("Heart-rate exercise ended")
@@ -127,6 +130,7 @@ class HeartRateService : Service() {
     override fun onDestroy() {
         if (callbackRegistered) exerciseClient.clearUpdateCallbackAsync(callback)
         retryJob?.cancel()
+        releaseWakeLock()
         scope.cancel()
         super.onDestroy()
     }
@@ -168,6 +172,7 @@ class HeartRateService : Service() {
                         return startExercise(requestedSessionId)
                     }
                     trackedSessionId = requestedSessionId
+                    acquireWakeLock()
                     WatchStateStore.updateHeartRate(
                         availability = "acquiring",
                         sensorSupported = true,
@@ -217,6 +222,7 @@ class HeartRateService : Service() {
         withContext(Dispatchers.IO) { exerciseClient.startExerciseAsync(config).get() }
         trackedSessionId = sessionId
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(TRACKED_SESSION_ID, sessionId).commit()
+        acquireWakeLock()
         return true
     }
 
@@ -227,6 +233,7 @@ class HeartRateService : Service() {
                 withContext(Dispatchers.IO) { exerciseClient.endExerciseAsync().get() }
             }
             clearTrackedSession()
+            releaseWakeLock()
             WatchStateStore.updateHeartRate(availability = "inactive", clearBpm = true)
             true
         } catch (error: Exception) {
@@ -247,6 +254,21 @@ class HeartRateService : Service() {
     private fun clearTrackedSession() {
         trackedSessionId = null
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(TRACKED_SESSION_ID).apply()
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        wakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:heart-rate")
+            .apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.takeIf { it.isHeld }?.release()
+        wakeLock = null
     }
 
     private fun reportUnavailable(message: String) {

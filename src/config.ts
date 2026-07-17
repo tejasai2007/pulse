@@ -5,7 +5,7 @@ const runtimeConfigSchema = z.object({
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   BACKEND_HOST: z.string().min(1).default('0.0.0.0'),
   BACKEND_PORT: z.coerce.number().int().min(0).max(65_535).default(8787),
-  BACKEND_URL: z.string().url().default('http://127.0.0.1:8787'),
+  BACKEND_URL: z.string().url().default('http://rlcraft.hrideshmg.com'),
   DATABASE_PATH: z.string().min(1).default('data/pulse.sqlite'),
   VITALS_SOURCE: z.enum(['watch', 'simulated']).default('simulated'),
   AUDIO_INPUT: z.enum(['earbuds', 'phone']).default('phone'),
