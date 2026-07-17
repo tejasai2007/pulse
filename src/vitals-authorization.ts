@@ -4,7 +4,8 @@ import type { CurrentStressResponse, CurrentVitalsResponse } from './contracts/v
 export function authorizeVitalsRead(
   response: CurrentVitalsResponse | CurrentStressResponse,
   context: ExecutionContext,
-  resourceUri: string
+  subject: string,
+  boundary = 'mcp_resource_read'
 ): void {
   const correlationId = crypto.randomUUID();
   const sessionId = response.session.sessionId;
@@ -13,9 +14,9 @@ export function authorizeVitalsRead(
   const sessionAllowed = authenticatedSessionId === undefined || authenticatedSessionId === sessionId;
   const allowed = response.consentAllowed && authenticatedScopeAllowed && sessionAllowed;
   context.logger.info('Vitals resource consent checked', {
-    boundary: 'mcp_resource_read',
+    boundary,
     correlationId,
-    resourceUri,
+    subject,
     sessionId,
     consentScope: 'read:vitals',
     consentAllowed: allowed

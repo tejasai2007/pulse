@@ -6,6 +6,7 @@ import { VitalsResources } from './vitals.resources.js';
 import { VitalsResourceNotifier } from './vitals-resource-notifier.js';
 import { SpeechMetricsResources } from './speech-metrics.resources.js';
 import { SessionReportPrompts, SessionReportResources, SessionReportTools } from './session-report.mcp.js';
+import { CurrentSessionTools } from './current-session.tools.js';
 
 @McpApp({
   module: AppModule,
@@ -21,6 +22,7 @@ import { SessionReportPrompts, SessionReportResources, SessionReportTools } from
     SessionReportResources,
     SessionReportTools,
     SessionReportPrompts,
+    CurrentSessionTools,
     SessionTools,
     PhaseZeroTools
   ],

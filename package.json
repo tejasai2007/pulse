@@ -11,7 +11,7 @@
     "start": "nitrostack-cli start",
     "start:backend": "node --env-file=.env --enable-source-maps dist/backend/index.js",
     "mock:events": "node --env-file=.env --enable-source-maps dist/scripts/send-mock-events.js",
-    "test": "npm run build && node --test dist/contracts/contracts.test.js dist/backend/stress-engine.test.js dist/backend/speech-metrics.test.js dist/backend/session-report.test.js dist/backend/server.test.js",
+    "test": "npm run build && node --test dist/contracts/contracts.test.js dist/current-session.tools.test.js dist/backend/stress-engine.test.js dist/backend/speech-metrics.test.js dist/backend/session-report.test.js dist/backend/server.test.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

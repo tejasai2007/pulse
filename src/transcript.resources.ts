@@ -1,12 +1,8 @@
 import { ExecutionContext, ResourceDecorator as Resource } from '@nitrostack/core';
 import { z } from 'zod';
 import { loadRuntimeConfig } from './config.js';
+import { currentTranscriptResponseSchema } from './contracts/current-session.js';
 import { sessionSchema, transcriptSegmentSchema } from './contracts/domain.js';
-
-const currentTranscriptSchema = z.object({
-  session: sessionSchema.nullable(),
-  segments: z.array(transcriptSegmentSchema)
-}).strict();
 
 const historicalTranscriptSchema = z.object({
   session: sessionSchema,
@@ -58,7 +54,7 @@ export class TranscriptResources {
       signal: AbortSignal.timeout(2_000)
     });
     if (!response.ok) throw new Error(`Backend transcript request failed (${response.status})`);
-    const transcript = currentTranscriptSchema.parse(await response.json());
+    const transcript = currentTranscriptResponseSchema.parse(await response.json());
     return transcript;
   }
 

@@ -1,12 +1,6 @@
 import { ExecutionContext, ResourceDecorator as Resource } from '@nitrostack/core';
-import { z } from 'zod';
 import { loadRuntimeConfig } from './config.js';
-import { sessionSchema, speechMetricSnapshotSchema } from './contracts/domain.js';
-
-const currentSpeechMetricsSchema = z.union([
-  z.object({ session: sessionSchema, metrics: speechMetricSnapshotSchema }).strict(),
-  z.object({ session: z.null(), metrics: z.null() }).strict()
-]);
+import { currentSpeechMetricsResponseSchema } from './contracts/current-session.js';
 
 export class SpeechMetricsResources {
   @Resource({
@@ -26,6 +20,6 @@ export class SpeechMetricsResources {
       signal: AbortSignal.timeout(2_000)
     });
     if (!response.ok) throw new Error(`Backend speech metrics request failed (${response.status})`);
-    return currentSpeechMetricsSchema.parse(await response.json());
+    return currentSpeechMetricsResponseSchema.parse(await response.json());
   }
 }
