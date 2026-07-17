@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
         ) {
             Text(state.bpm?.let { "${it.toInt()} BPM" } ?: "-- BPM", style = MaterialTheme.typography.titleLarge)
             Text(if (permitted) state.availability else "Sensor permission required")
+            Text("Vitals: ${BuildConfig.VITALS_SOURCE}")
             Button(onClick = { sendReading(state) }, enabled = state.bpm != null) { Text("Send to phone") }
         }
     }

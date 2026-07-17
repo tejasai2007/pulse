@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "type": "vital_sample_received",
+  "sessionId": "session-fixture-001",
+  "eventId": "event-vital-001",
+  "timestamp": "2026-07-17T10:00:02.000Z",
+  "correlationId": "correlation-fixture-001",
+  "payload": {
+    "sessionId": "session-fixture-001",
+    "bpm": 82,
+    "availability": "available",
+    "sessionElapsedMs": 2000,
+    "deviceTimestamp": "2026-07-17T10:00:02.000Z",
+    "source": "simulator"
+  }
+}

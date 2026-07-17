@@ -7,6 +7,6 @@ async function bootstrap(): Promise<void> {
 }
 
 bootstrap().catch((error: unknown) => {
-  console.error('Failed to start Phase 0 MCP probe:', error);
+  console.error('Failed to start Pulse MCP server:', error);
   process.exit(1);
 });

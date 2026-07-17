@@ -5,7 +5,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="Coach Phase 0"
+        android:label="Pulse"
         android:theme="@style/Theme.CoachProbe">
         <activity
             android:name=".MainActivity"

@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "type": "transcript_segment_received",
+  "sessionId": "session-fixture-001",
+  "eventId": "event-transcript-001",
+  "timestamp": "2026-07-17T10:00:03.000Z",
+  "correlationId": "correlation-fixture-001",
+  "payload": {
+    "sessionId": "session-fixture-001",
+    "segmentId": "segment-fixture-001",
+    "speaker": "wearer",
+    "text": "This is a contract fixture.",
+    "startMs": 2100,
+    "endMs": 2900,
+    "providerTimestamp": "2026-07-17T10:00:03.000Z",
+    "confidence": 0.98,
+    "isFinal": true
+  }
+}

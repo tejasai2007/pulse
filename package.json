@@ -1,12 +1,16 @@
 {
-  "name": "nitrostack-watch-phase-zero",
-  "version": "0.1.0",
+  "name": "pulse",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "nitrostack-cli dev",
+    "dev:backend": "npm run build && node --enable-source-maps dist/backend/index.js",
     "build": "nitrostack-cli build",
     "start": "nitrostack-cli start",
+    "start:backend": "node --enable-source-maps dist/backend/index.js",
+    "mock:events": "node --enable-source-maps dist/scripts/send-mock-events.js",
+    "test": "npm run build && node --test dist/contracts/contracts.test.js dist/backend/server.test.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "type": "session_started",
+  "sessionId": "session-fixture-001",
+  "eventId": "event-session-started-001",
+  "timestamp": "2026-07-17T10:00:00.000Z",
+  "correlationId": "correlation-fixture-001",
+  "payload": {
+    "session": {
+      "sessionId": "session-fixture-001",
+      "status": "calibrating",
+      "startedAt": "2026-07-17T10:00:00.000Z",
+      "endedAt": null,
+      "simulatedVitals": true,
+      "audioInputRoute": "phone"
+    }
+  }
+}

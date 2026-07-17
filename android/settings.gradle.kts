@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WearableCoachPhaseZero"
-include(":phone", ":watch")
+rootProject.name = "Pulse"
+include(":contracts", ":phone", ":watch")

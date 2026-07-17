@@ -70,7 +70,9 @@ class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     @Composable
     private fun PhaseZeroScreen() {
         val probe = remember { AudioProbe(this, lifecycleScope) }
+        val foundation = remember { FoundationClient(lifecycleScope) }
         val audio by probe.state.collectAsStateWithLifecycle()
+        val foundationStatus by foundation.status.collectAsStateWithLifecycle()
         var permissionGranted by remember {
             mutableStateOf(
                 ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED &&
@@ -82,11 +84,15 @@ class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         }
         LaunchedEffect(Unit) {
             if (!permissionGranted) permission.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.BLUETOOTH_CONNECT))
+            foundation.checkHealth()
         }
         DisposableEffect(probe) { onDispose { probe.close() } }
 
         Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Phase 0 hardware probe", style = MaterialTheme.typography.headlineMedium)
+            Text("Pulse foundation", style = MaterialTheme.typography.headlineMedium)
+            Text("Vitals: ${BuildConfig.VITALS_SOURCE} | Audio: ${BuildConfig.AUDIO_INPUT}")
+            Text("Transcription: ${BuildConfig.TRANSCRIPTION_MODE} | Actions: ${BuildConfig.DEVICE_ACTIONS}")
+            Text(foundationStatus)
             Text("Watch: $heartRate")
             Text("Audio route: ${audio.route}")
             Text(audio.status)
@@ -95,6 +101,7 @@ class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
                 Button(onClick = { selectEarbudsOrFallback(probe) }, enabled = permissionGranted) { Text("Select earbuds") }
                 Button(onClick = { sendHaptic() }) { Text("Vibrate watch") }
             }
+            Button(onClick = foundation::sendMockSequence) { Text("Send mock events") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { if (audio.capturing) probe.stopCapture() else probe.startCapture() }, enabled = permissionGranted) {
                     Text(if (audio.capturing) "Stop capture" else "Record + transcribe")

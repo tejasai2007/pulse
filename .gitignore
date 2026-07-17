@@ -5,6 +5,8 @@ dist/
 .env
 local.properties
 **/build/
+**/.gradle/
+**/.kotlin/
 *.iml
 
 # Python
