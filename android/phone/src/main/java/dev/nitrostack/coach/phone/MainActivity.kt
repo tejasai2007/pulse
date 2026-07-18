@@ -83,16 +83,12 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text("Pulse vitals", style = MaterialTheme.typography.headlineMedium)
-            if (BuildConfig.VITALS_SOURCE == "simulated") Text("SIMULATED VITALS", color = MaterialTheme.colorScheme.error)
-            Text("Session: ${vitals.sessionStatus} ${vitals.sessionId.orEmpty()}")
-            Text(if (vitals.sessionStatus in setOf("calibrating", "active")) "Agent vitals access: consented for this session" else "Agent vitals access: off")
-            Text(heartRateDisplay(latestBpm, stale, vitals.source))
-            Text("Sensor: ${vitals.availability}")
-            Text("Exercise mode: ${if (vitals.exerciseMode) "on" else "off"}")
-            Text("Watch: ${if (vitals.watchConnected) "connected" else "offline"} | Backend: ${if (vitals.backendConnected) "connected" else "offline"}")
-            Text("Upload queue: ${vitals.pendingEvents} | ${vitals.message}")
-            if (BuildConfig.COPILOT_ENABLED) Text("Copilot: ${vitals.copilotState}")
             if (BuildConfig.COPILOT_ENABLED) {
+                Text(
+                    if (vitals.copilotState == "completed") "Conversation copilot: ready"
+                    else "Conversation copilot: ${vitals.copilotState}",
+                    style = MaterialTheme.typography.titleMedium
+                )
                 OutlinedTextField(
                     value = copilotSituation,
                     onValueChange = { copilotSituation = it },
@@ -109,7 +105,16 @@ class MainActivity : ComponentActivity() {
                     onClick = { pipeline.configureCopilot(copilotSituation, copilotGoal, !vitals.copilotConsented) },
                     enabled = vitals.sessionStatus == "active"
                 ) { Text(if (vitals.copilotConsented) "Disable copilot" else "Enable copilot") }
+                if (vitals.sessionStatus != "active") Text("Start a session to enable copilot.")
             }
+            if (BuildConfig.VITALS_SOURCE == "simulated") Text("SIMULATED VITALS", color = MaterialTheme.colorScheme.error)
+            Text("Session: ${vitals.sessionStatus} ${vitals.sessionId.orEmpty()}")
+            Text(if (vitals.sessionStatus in setOf("calibrating", "active")) "Agent vitals access: consented for this session" else "Agent vitals access: off")
+            Text(heartRateDisplay(latestBpm, stale, vitals.source))
+            Text("Sensor: ${vitals.availability}")
+            Text("Exercise mode: ${if (vitals.exerciseMode) "on" else "off"}")
+            Text("Watch: ${if (vitals.watchConnected) "connected" else "offline"} | Backend: ${if (vitals.backendConnected) "connected" else "offline"}")
+            Text("Upload queue: ${vitals.pendingEvents} | ${vitals.message}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = application::startSession,

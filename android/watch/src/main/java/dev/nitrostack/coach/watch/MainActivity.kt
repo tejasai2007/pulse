@@ -11,6 +11,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -19,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material3.MaterialTheme
@@ -80,9 +84,12 @@ class MainActivity : ComponentActivity() {
         }
 
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(reading.bpm?.let { "${it.toInt()} BPM" } ?: "-- BPM", style = MaterialTheme.typography.titleLarge)
             Text(if (permitted) availabilityLabel(reading) else "Sensor permission required")
@@ -90,7 +97,9 @@ class MainActivity : ComponentActivity() {
             Text("Backend ${if (bridge.backendConnected) "connected" else "offline"}")
             Text("Session ${bridge.sessionStatus}")
             if (bridge.pendingEvents > 0) Text("${bridge.pendingEvents} reading(s) queued")
-            if (BuildConfig.COPILOT_ENABLED) Text("Copilot ${bridge.copilotState}")
+            if (BuildConfig.COPILOT_ENABLED) {
+                Text(if (bridge.copilotState == "completed") "Copilot ready" else "Copilot ${bridge.copilotState}")
+            }
             Button(
                 onClick = { sendSessionAction(if (bridge.sessionStatus in setOf("calibrating", "active")) "end" else "start") },
                 enabled = bridge.phoneConnected
