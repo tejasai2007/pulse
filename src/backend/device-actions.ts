@@ -157,6 +157,9 @@ export class DeviceActions {
         requestedAt: event.timestamp
       });
       this.broadcastCopilotState(result.request);
+      if (!result.duplicate && this.config.COPILOT_MODE === 'automatic') {
+        this.processCopilotRequest(result.request);
+      }
       return;
     }
     if (event.type === 'consent_updated' && event.payload.scope === 'act:audio' && event.payload.revokedAt !== null) {
@@ -217,6 +220,38 @@ export class DeviceActions {
       this.markCopilotPlaying(pending.commandId);
       return;
     }
+  }
+
+  private processCopilotRequest(request: CopilotRequest): void {
+    const context = this.store.getContext(request.sessionId);
+    if (!context || !this.store.hasActiveConsent(request.sessionId, 'act:audio')) {
+      this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, 'failed'));
+      return;
+    }
+
+    const transcript = this.store.getTranscriptSegments(request.sessionId);
+    const spoken = transcript.map(({ text }) => text.toLocaleLowerCase()).join(' ');
+    const goalIndex = context.goals.findIndex((goal) => !spoken.includes(goal.toLocaleLowerCase()));
+    const selectedGoalIndex = goalIndex >= 0 ? goalIndex : context.goals.length > 0 ? 0 : -1;
+    const goal = selectedGoalIndex >= 0 ? context.goals[selectedGoalIndex] : undefined;
+    const goalWords = goal?.trim().split(/\s+/u).slice(0, 18) ?? [];
+    const text = goalWords.length > 0
+      ? `Next, mention ${goalWords.join(' ')}`
+      : 'Pause, listen, and ask one clear follow-up question.';
+    const evidenceId = selectedGoalIndex >= 0
+      ? `context:goal:${selectedGoalIndex}`
+      : transcript.at(-1)?.segmentId ?? 'context:situation';
+
+    const thinking = this.store.updateCopilotRequest(request.requestId, 'thinking');
+    this.broadcastCopilotState(thinking);
+    this.copilotAdvice({
+      requestId: request.requestId,
+      text,
+      triggerEvidenceIds: [evidenceId],
+      confidentialContextDirectlyUseful: goal !== undefined,
+      expiresInMs: 15_000,
+      requestingAgentId: 'backend-copilot'
+    });
   }
 
   private requireActionableSession(scope: 'act:haptic' | 'act:audio') {

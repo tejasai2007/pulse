@@ -12,6 +12,7 @@ const runtimeConfigSchema = z.object({
   TRANSCRIPTION_MODE: z.enum(['cloud', 'on_device', 'fixture']).default('fixture'),
   DEVICE_ACTIONS: z.enum(['real', 'simulated']).default('simulated'),
   COPILOT_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  COPILOT_MODE: z.enum(['automatic', 'mcp']).default('automatic'),
   STORE_RAW_AUDIO: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
   DEEPGRAM_API_KEY: z.string().min(1).optional()
 }).strict();

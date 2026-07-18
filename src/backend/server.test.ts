@@ -23,6 +23,7 @@ const config: RuntimeConfig = {
   TRANSCRIPTION_MODE: 'fixture',
   DEVICE_ACTIONS: 'simulated',
   COPILOT_ENABLED: false,
+  COPILOT_MODE: 'automatic',
   STORE_RAW_AUDIO: false,
   DEEPGRAM_API_KEY: undefined
 };
@@ -499,7 +500,7 @@ describe('Phase 2 backend', () => {
 });
 
 describe('Phase 8 conversation copilot', () => {
-  const copilotBackend = createBackend({ ...config, COPILOT_ENABLED: true });
+  const copilotBackend = createBackend({ ...config, COPILOT_ENABLED: true, COPILOT_MODE: 'mcp' });
   let baseUrl = '';
 
   before(async () => {
@@ -637,6 +638,73 @@ describe('Phase 8 conversation copilot', () => {
     assert.equal(pending.request, null);
     assert.equal(copilotBackend.store.getCopilotRequest('phase-eight-stale-request')?.state, 'expired');
     assert.equal(copilotBackend.store.getInterventions('session-phase-eight').length, 1);
+  });
+});
+
+describe('Automatic conversation copilot', () => {
+  const automaticBackend = createBackend({ ...config, COPILOT_ENABLED: true, COPILOT_MODE: 'automatic' });
+  let baseUrl = '';
+
+  before(async () => {
+    await new Promise<void>((resolve) => automaticBackend.server.listen(0, '127.0.0.1', resolve));
+    const address = automaticBackend.server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  after(async () => {
+    automaticBackend.websocketServer.close();
+    await new Promise<void>((resolve, reject) => automaticBackend.server.close((error) => error ? reject(error) : resolve()));
+  });
+
+  it('turns a watch request into goal-based advice without an MCP claim', async () => {
+    const sessionId = 'automatic-copilot-session';
+    const startedAt = new Date(Date.now() - 5_000).toISOString();
+    const events = [
+      {
+        ...mockEventSequence[0],
+        sessionId,
+        eventId: 'automatic-session',
+        timestamp: startedAt,
+        payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+      },
+      {
+        version: '1.0', type: 'session_context_updated', sessionId, eventId: 'automatic-context',
+        timestamp: startedAt, correlationId: 'automatic-context-correlation',
+        payload: {
+          sessionId,
+          wearerSummary: '',
+          situation: 'Project update',
+          participants: [],
+          goals: ['Explain the implementation timeline'],
+          topicsToAvoid: [],
+          stressSensitivity: { baselineOffsetBpm: 12, elevationTriggerMs: 5_000, recoveryTriggerMs: 3_000, cooldownMs: 10_000 }
+        }
+      },
+      {
+        version: '1.0', type: 'consent_updated', sessionId, eventId: 'automatic-audio-consent',
+        timestamp: startedAt, correlationId: 'automatic-consent-correlation',
+        payload: { grantId: 'automatic-audio-consent', sessionId, scope: 'act:audio', grantedAt: startedAt, revokedAt: null }
+      },
+      {
+        version: '1.0', type: 'advice_requested', sessionId, eventId: 'automatic-request-event',
+        timestamp: new Date().toISOString(), correlationId: 'automatic-request-correlation',
+        payload: { requestId: 'automatic-request' }
+      }
+    ];
+
+    for (const event of events) {
+      const response = await fetch(`${baseUrl}/v1/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+      });
+      assert.equal(response.status, 202);
+    }
+
+    const request = automaticBackend.store.getCopilotRequest('automatic-request');
+    assert.equal(request?.state, 'completed');
+    assert.equal(request?.advice, 'Next, mention Explain the implementation timeline');
+    assert.equal(automaticBackend.store.getInterventions(sessionId).length, 1);
+    const pending = await (await fetch(`${baseUrl}/v1/copilot/requests/pending`)).json() as { request: unknown };
+    assert.equal(pending.request, null);
   });
 });
 

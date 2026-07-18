@@ -17,7 +17,9 @@ export const healthResponseSchema = z.object({
     vitalsSource: z.enum(['watch', 'simulated']),
     audioInput: z.enum(['earbuds', 'phone']),
     transcriptionMode: z.enum(['cloud', 'on_device', 'fixture']),
-    deviceActions: z.enum(['real', 'simulated'])
+    deviceActions: z.enum(['real', 'simulated']),
+    copilotEnabled: z.boolean(),
+    copilotMode: z.enum(['automatic', 'mcp'])
   }).strict()
 }).strict();
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
@@ -46,7 +48,9 @@ export function localHealth(component: string, config: RuntimeConfig): HealthRes
       vitalsSource: config.VITALS_SOURCE,
       audioInput: config.AUDIO_INPUT,
       transcriptionMode: config.TRANSCRIPTION_MODE,
-      deviceActions: config.DEVICE_ACTIONS
+      deviceActions: config.DEVICE_ACTIONS,
+      copilotEnabled: config.COPILOT_ENABLED,
+      copilotMode: config.COPILOT_MODE
     }
   };
 }
