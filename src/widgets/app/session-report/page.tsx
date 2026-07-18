@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useApp } from '@modelcontextprotocol/ext-apps/react';
-import { useTheme, useWidgetSDK, WidgetLayout } from '@nitrostack/widgets';
+import { useTheme, useWidgetSDK } from '@nitrostack/widgets';
 
 type VitalItem = {
   kind: 'vital';
@@ -31,7 +31,7 @@ type Report = {
 };
 
 export default function SessionReportWidget() {
-  return <WidgetLayout><SessionReportContent /></WidgetLayout>;
+  return <SessionReportContent />;
 }
 
 function SessionReportContent() {

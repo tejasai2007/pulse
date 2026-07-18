@@ -1,11 +1,13 @@
 {
   "name": "pulse-widgets",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev --port 3001",
     "build": "next build",
-    "start": "next start --port 3001"
+    "start": "next start --port 3001",
+    "test": "next build"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "1.7.4",

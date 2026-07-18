@@ -17,7 +17,9 @@ export const healthResponseSchema = z.object({
     vitalsSource: z.enum(['watch', 'simulated']),
     audioInput: z.enum(['earbuds', 'phone']),
     transcriptionMode: z.enum(['cloud', 'on_device', 'fixture']),
-    deviceActions: z.enum(['real', 'simulated'])
+    deviceActions: z.enum(['real', 'simulated']),
+    copilotEnabled: z.boolean(),
+    copilotMode: z.enum(['automatic', 'mcp'])
   }).strict()
 }).strict();
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
@@ -31,7 +33,14 @@ export function localHealth(component: string, config: RuntimeConfig): HealthRes
   const device = config.DEVICE_ACTIONS === 'simulated'
     ? { name: 'device_command_channel', status: 'available' as const, detail: 'simulated actions selected' }
     : { name: 'device_command_channel', status: 'degraded' as const, detail: 'real channel awaits phone connection' };
-  const dependencies = [transcription, device];
+  const copilot = !config.COPILOT_ENABLED
+    ? { name: 'copilot_provider', status: 'available' as const, detail: 'conversation copilot disabled' }
+    : config.COPILOT_MODE === 'mcp'
+      ? { name: 'copilot_provider', status: 'available' as const, detail: 'MCP processing selected' }
+      : config.OPENAI_API_KEY
+        ? { name: 'copilot_provider', status: 'available' as const, detail: `${config.OPENAI_MODEL} configured` }
+        : { name: 'copilot_provider', status: 'degraded' as const, detail: 'OPENAI_API_KEY is missing; deterministic fallback active' };
+  const dependencies = [transcription, device, copilot];
   const status = dependencies.some((item) => item.status === 'unavailable')
     ? 'unavailable'
     : dependencies.some((item) => item.status === 'degraded') ? 'degraded' : 'ok';
@@ -46,7 +55,9 @@ export function localHealth(component: string, config: RuntimeConfig): HealthRes
       vitalsSource: config.VITALS_SOURCE,
       audioInput: config.AUDIO_INPUT,
       transcriptionMode: config.TRANSCRIPTION_MODE,
-      deviceActions: config.DEVICE_ACTIONS
+      deviceActions: config.DEVICE_ACTIONS,
+      copilotEnabled: config.COPILOT_ENABLED,
+      copilotMode: config.COPILOT_MODE
     }
   };
 }

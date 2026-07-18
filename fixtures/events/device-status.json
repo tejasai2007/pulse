@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "type": "device_status_updated",
+  "sessionId": "session-fixture-001",
+  "eventId": "event-device-status-001",
+  "timestamp": "2026-07-17T10:00:04.000Z",
+  "correlationId": "correlation-fixture-001",
+  "payload": {
+    "sessionId": "session-fixture-001",
+    "reportedAt": "2026-07-17T10:00:04.000Z",
+    "watch": { "state": "connected", "mode": "simulated", "detail": "Simulated vital sequence ready", "checkedAt": "2026-07-17T10:00:04.000Z" },
+    "phone": { "state": "connected", "mode": "live", "detail": "Phone app connected", "checkedAt": "2026-07-17T10:00:04.000Z" },
+    "earbuds": { "state": "degraded", "mode": "fallback", "detail": "Phone-mic fallback active", "checkedAt": "2026-07-17T10:00:04.000Z" },
+    "microphone": { "state": "connected", "mode": "fallback", "detail": "Phone microphone capturing", "checkedAt": "2026-07-17T10:00:04.000Z" },
+    "transcriptionProvider": { "state": "connected", "mode": "fallback", "detail": "Fixture transcription selected", "checkedAt": "2026-07-17T10:00:04.000Z" }
+  }
+}

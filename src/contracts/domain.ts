@@ -113,7 +113,7 @@ export const interventionSchema = z.object({
   type: z.enum(['haptic_nudge', 'whisper_coach', 'copilot_advice']),
   triggerEvidenceIds: z.array(id).max(200),
   requestingAgentId: id,
-  generatedMessage: z.string().max(500).nullable(),
+  generatedMessage: z.string().nullable(),
   requestedAt: timestamp,
   queuedAt: timestamp.nullable(),
   playedAt: timestamp.nullable(),

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -68,6 +69,13 @@ class MainActivity : ComponentActivity() {
     private fun VitalsScreen() {
         val reading by WatchStateStore.heartRate.collectAsStateWithLifecycle()
         val bridge by WatchStateStore.state.collectAsStateWithLifecycle()
+        val copilotDisabledReason = when {
+            !bridge.phoneConnected -> "Copilot unavailable: connect the phone"
+            !bridge.backendConnected -> "Copilot unavailable: connect the backend"
+            bridge.sessionStatus != "active" -> "Copilot unavailable: start a session"
+            bridge.copilotState in setOf("requested", "thinking", "queued", "playing") -> "Copilot request in progress"
+            else -> null
+        }
         var permitted by remember {
             mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.BODY_SENSORS) == PackageManager.PERMISSION_GRANTED)
         }
@@ -112,8 +120,12 @@ class MainActivity : ComponentActivity() {
                 live = readingLive,
                 sessionActive = sessionActive,
                 enabled = bridge.phoneConnected,
+                copilotEnabled = BuildConfig.COPILOT_ENABLED,
+                copilotAvailable = copilotDisabledReason == null,
+                copilotLabel = if (copilotDisabledReason == null) "ASK COPILOT" else "COPILOT",
                 size = dialSize,
-                onClick = { sendSessionAction(if (sessionActive) "end" else "start") }
+                onSessionClick = { sendSessionAction(if (sessionActive) "end" else "start") },
+                onCopilotClick = ::requestAdvice
             )
         }
     }
@@ -135,6 +147,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestAdvice() {
+        val eventId = UUID.randomUUID().toString()
+        val requestId = UUID.randomUUID().toString()
+        val sessionId = WatchStateStore.state.value.sessionId ?: return
+        val event = PulseContract.envelope(
+            type = "advice_requested",
+            sessionId = sessionId,
+            eventId = eventId,
+            payload = JSONObject().put("requestId", requestId)
+        )
+        val request = PutDataMapRequest.create(PulseDataLayer.adviceRequestPath(eventId)).apply {
+            dataMap.putString(PulseDataLayer.EVENT_JSON, event.toString())
+        }.asPutDataRequest().setUrgent()
+        Wearable.getDataClient(this).putDataItem(request).addOnSuccessListener {
+            WatchStateStore.addPending(this, eventId)
+            WatchStateStore.updateCopilotState(this, "requested")
+            PulseLog.boundary("watch", "watch_to_phone", event, "Queued advice request")
+        }
+    }
 }
 
 private val WatchBackground = Color(0xFF06141C)
@@ -151,8 +182,12 @@ private fun HeartRateDial(
     live: Boolean,
     sessionActive: Boolean,
     enabled: Boolean,
+    copilotEnabled: Boolean,
+    copilotAvailable: Boolean,
+    copilotLabel: String,
     size: Dp,
-    onClick: () -> Unit
+    onSessionClick: () -> Unit,
+    onCopilotClick: () -> Unit
 ) {
     val actionColor = when {
         !enabled -> WatchOffline
@@ -164,13 +199,7 @@ private fun HeartRateDial(
         modifier = Modifier
             .size(size)
             .clip(CircleShape)
-            .background(WatchSurface.copy(alpha = 0.45f))
-            .clickable(
-                enabled = enabled,
-                onClickLabel = if (sessionActive) "End session" else "Start session",
-                role = Role.Button,
-                onClick = onClick
-            ),
+            .background(WatchSurface.copy(alpha = 0.45f)),
         contentAlignment = Alignment.Center
     ) {
         Canvas(Modifier.fillMaxSize()) {
@@ -217,24 +246,56 @@ private fun HeartRateDial(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp
             )
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(actionColor.copy(alpha = 0.16f))
-                    .padding(horizontal = if (compact) 9.dp else 12.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    when {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                DialAction(
+                    label = when {
                         !enabled -> "PHONE OFFLINE"
                         sessionActive -> "STOP"
                         else -> "START"
                     },
                     color = actionColor,
-                    fontSize = if (compact) 8.sp else 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
+                    enabled = enabled,
+                    compact = compact,
+                    onClickLabel = if (sessionActive) "End session" else "Start session",
+                    onClick = onSessionClick
                 )
+                if (copilotEnabled) {
+                    DialAction(
+                        label = copilotLabel,
+                        color = if (copilotAvailable) WatchAccent else WatchOffline,
+                        enabled = copilotAvailable,
+                        compact = compact,
+                        onClickLabel = "Ask copilot",
+                        onClick = onCopilotClick
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun DialAction(
+    label: String,
+    color: Color,
+    enabled: Boolean,
+    compact: Boolean,
+    onClickLabel: String,
+    onClick: () -> Unit
+) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(color.copy(alpha = 0.16f))
+            .clickable(enabled = enabled, onClickLabel = onClickLabel, role = Role.Button, onClick = onClick)
+            .padding(horizontal = if (compact) 7.dp else 10.dp, vertical = 4.dp)
+    ) {
+        Text(
+            label,
+            color = color,
+            fontSize = if (compact) 7.sp else 8.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.6.sp
+        )
     }
 }

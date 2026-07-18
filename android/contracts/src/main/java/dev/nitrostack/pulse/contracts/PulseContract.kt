@@ -12,7 +12,8 @@ object PulseContract {
         "session_state", "haptic_command", "connection_status", "session_started",
         "session_ended", "session_context_updated", "vital_sample_received",
         "transcript_segment_received", "audio_route_changed", "consent_updated",
-        "playback_completed", "play_tts", "cancel_tts", "send_watch_haptic", "report_ready"
+        "playback_completed", "play_tts", "cancel_tts", "send_watch_haptic", "report_ready",
+        "advice_requested", "copilot_state"
     )
 
     fun envelope(

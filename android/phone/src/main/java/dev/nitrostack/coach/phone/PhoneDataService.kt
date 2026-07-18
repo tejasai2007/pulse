@@ -36,6 +36,13 @@ class PhoneDataService : WearableListenerService() {
                     else -> return@forEach
                 }
                 acknowledge(PulseDataLayer.sessionActionAckPath(eventId), eventId)
+            } else if (path.startsWith(PulseDataLayer.ADVICE_REQUEST_PREFIX)) {
+                val envelope = runCatching { dev.nitrostack.pulse.contracts.PulseContract.validateEnvelope(eventJson) }.getOrNull()
+                    ?: return@forEach
+                val eventId = envelope.getString("eventId")
+                if (PulseApplication.pipeline(this).acceptAdviceRequest(eventJson)) {
+                    acknowledge(PulseDataLayer.adviceRequestAckPath(eventId), eventId)
+                }
             }
         }
     }

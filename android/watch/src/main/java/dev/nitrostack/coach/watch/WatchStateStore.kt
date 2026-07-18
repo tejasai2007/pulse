@@ -13,7 +13,8 @@ data class WatchState(
     val sessionClockSynchronized: Boolean = false,
     val phoneConnected: Boolean = false,
     val backendConnected: Boolean = false,
-    val pendingEvents: Int = 0
+    val pendingEvents: Int = 0,
+    val copilotState: String = "completed"
 )
 
 data class HeartRateState(
@@ -40,31 +41,35 @@ object WatchStateStore {
             sessionStatus = prefs.getString("session_status", "created") ?: "created",
             sessionStartElapsedRealtimeMs = if (validMonotonicAnchor) prefs.getLong("session_start_elapsed", 0) else 0,
             sessionClockSynchronized = validMonotonicAnchor && prefs.getBoolean("session_clock_synchronized", false),
-            pendingEvents = prefs.getStringSet(PENDING, emptySet()).orEmpty().size
+            pendingEvents = prefs.getStringSet(PENDING, emptySet()).orEmpty().size,
+            copilotState = prefs.getString("copilot_state", "completed") ?: "completed"
         )
     }
 
     fun updateSession(context: Context, sessionId: String, status: String, sessionElapsedAtSyncMs: Long) {
         val current = mutableState.value
         val sessionChanged = current.sessionId != sessionId
+        val resetCopilot = sessionChanged || status !in setOf("calibrating", "active")
         val alreadySynchronized = current.sessionId == sessionId && current.sessionClockSynchronized
         val startElapsed = if (alreadySynchronized) {
             current.sessionStartElapsedRealtimeMs
         } else {
             SystemClock.elapsedRealtime() - sessionElapsedAtSyncMs
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("session_id", sessionId)
             .putString("session_status", status)
             .putLong("session_start_elapsed", startElapsed)
             .putLong("boot_epoch", System.currentTimeMillis() - SystemClock.elapsedRealtime())
             .putBoolean("session_clock_synchronized", true)
-            .apply()
+        if (resetCopilot) editor.putString("copilot_state", "completed")
+        editor.apply()
         mutableState.value = mutableState.value.copy(
             sessionId = sessionId,
             sessionStatus = status,
             sessionStartElapsedRealtimeMs = startElapsed,
-            sessionClockSynchronized = true
+            sessionClockSynchronized = true,
+            copilotState = if (resetCopilot) "completed" else current.copilotState
         )
         if (sessionChanged || status !in setOf("calibrating", "active")) {
             updateHeartRate(
@@ -94,6 +99,11 @@ object WatchStateStore {
             phoneConnected = phoneConnected ?: mutableState.value.phoneConnected,
             backendConnected = backendConnected ?: mutableState.value.backendConnected
         )
+    }
+
+    fun updateCopilotState(context: Context, state: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("copilot_state", state).apply()
+        mutableState.value = mutableState.value.copy(copilotState = state)
     }
 
     fun addPending(context: Context, eventId: String) = updatePending(context) { it + eventId }

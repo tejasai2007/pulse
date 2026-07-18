@@ -30,6 +30,10 @@
                 <data android:scheme="wear" android:host="*" android:pathPrefix="/pulse/session-actions/" />
             </intent-filter>
             <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/pulse/advice-requests/" />
+            </intent-filter>
+            <intent-filter>
                 <action android:name="com.google.android.gms.wearable.NODE_CHANGED" />
             </intent-filter>
         </service>

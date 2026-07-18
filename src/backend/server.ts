@@ -6,10 +6,13 @@ import { loadRuntimeConfig, type RuntimeConfig } from '../config.js';
 import { pulseEventSchema, type EventAcknowledgement } from '../contracts/events.js';
 import { sessionStatusSchema } from '../contracts/domain.js';
 import { sessionSearchInputSchema } from '../contracts/session-search.js';
+import { backendHapticRequestSchema, backendWhisperRequestSchema } from '../contracts/interventions.js';
 import { currentStressResponseSchema, currentVitalsResponseSchema } from '../contracts/vitals-resources.js';
 import { localHealth } from '../health.js';
 import { StructuredLogger } from '../observability/logger.js';
 import { EventStore } from './event-store.js';
+import { DeviceActions } from './device-actions.js';
+import { copilotAdviceInputSchema, pendingCopilotResponseSchema } from '../contracts/copilot.js';
 
 const MAX_BODY_BYTES = 1_000_000;
 const VITAL_STALE_AFTER_MS = 10_000;
@@ -19,15 +22,17 @@ export interface Backend {
   store: EventStore;
   logger: StructuredLogger;
   websocketServer: WebSocketServer;
+  deviceActions: DeviceActions;
 }
 
 export function createBackend(config: RuntimeConfig = loadRuntimeConfig()): Backend {
   const logger = new StructuredLogger('backend', config.LOG_LEVEL);
   const store = new EventStore(logger, config.DATABASE_PATH);
+  const deviceActions = new DeviceActions(store, config, logger);
   const websocketServer = new WebSocketServer({ noServer: true });
   const server = createServer(async (request, response) => {
     try {
-      await route(request, response, store, config, logger);
+      await route(request, response, store, deviceActions, config, logger);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown backend error';
       logger.error('Request failed', { boundary: 'http', error: message });
@@ -46,12 +51,24 @@ export function createBackend(config: RuntimeConfig = loadRuntimeConfig()): Back
       websocketServer.emit('connection', websocket, request);
     });
   });
-  websocketServer.on('connection', (socket) => handleSessionStream(socket, store, logger));
-  server.on('close', () => store.close());
-  return { server, store, logger, websocketServer };
+  websocketServer.on('connection', (socket) => {
+    deviceActions.addSocket(socket);
+    handleSessionStream(socket, store, deviceActions, config, logger);
+  });
+  server.on('close', () => {
+    deviceActions.close();
+    store.close();
+  });
+  return { server, store, logger, websocketServer, deviceActions };
 }
 
-function handleSessionStream(socket: WebSocket, store: EventStore, logger: StructuredLogger): void {
+function handleSessionStream(
+  socket: WebSocket,
+  store: EventStore,
+  deviceActions: DeviceActions,
+  config: RuntimeConfig,
+  logger: StructuredLogger
+): void {
   logger.info('Persistent session connection opened', { boundary: 'phone_to_backend_stream' });
   socket.on('message', (data) => {
     const raw = data.toString();
@@ -64,7 +81,14 @@ function handleSessionStream(socket: WebSocket, store: EventStore, logger: Struc
         correlationId: event.correlationId,
         eventType: event.type
       });
-      socket.send(JSON.stringify(store.ingest(event)));
+      deviceActions.beforeIngest(event);
+      if (event.type === 'advice_requested' && !config.COPILOT_ENABLED) {
+        socket.send(JSON.stringify(disabledCopilotAcknowledgement(event.eventId)));
+        return;
+      }
+      const acknowledgement = store.ingest(event);
+      deviceActions.afterIngest(event, acknowledgement.duplicate);
+      socket.send(JSON.stringify(acknowledgement));
     } catch (error) {
       const acknowledgement: EventAcknowledgement = {
         eventId: eventIdFrom(raw),
@@ -94,6 +118,7 @@ async function route(
   request: IncomingMessage,
   response: ServerResponse,
   store: EventStore,
+  deviceActions: DeviceActions,
   config: RuntimeConfig,
   logger: StructuredLogger
 ): Promise<void> {
@@ -113,7 +138,14 @@ async function route(
       correlationId: event.correlationId,
       eventType: event.type
     });
-    sendJson(response, 202, store.ingest(event));
+    deviceActions.beforeIngest(event);
+    if (event.type === 'advice_requested' && !config.COPILOT_ENABLED) {
+      sendJson(response, 202, disabledCopilotAcknowledgement(event.eventId));
+      return;
+    }
+    const acknowledgement = store.ingest(event);
+    deviceActions.afterIngest(event, acknowledgement.duplicate);
+    sendJson(response, 202, acknowledgement);
     return;
   }
 
@@ -178,9 +210,59 @@ async function route(
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/v1/sessions/current/context') {
+    const session = store.getCurrentSession();
+    if (!session) {
+      sendJson(response, 200, { session: null, context: null, consentAllowed: false, evidenceIds: null });
+      return;
+    }
+    const context = store.getContext(session.sessionId) ?? null;
+    sendJson(response, 200, {
+      session,
+      context,
+      consentAllowed: store.hasActiveConsent(session.sessionId, 'read:context'),
+      evidenceIds: context ? {
+        situation: 'context:situation',
+        goals: context.goals.map((_, index) => `context:goal:${index}`)
+      } : null
+    });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/v1/copilot/requests/pending') {
+    sendJson(response, 200, pendingCopilotResponseSchema.parse(deviceActions.claimCopilotRequest()));
+    return;
+  }
+
+  const copilotAdviceMatch = url.pathname.match(/^\/v1\/copilot\/requests\/([^/]+)\/advice$/);
+  if (request.method === 'POST' && copilotAdviceMatch) {
+    const body = await readJson(request);
+    const input = copilotAdviceInputSchema.extend({
+      requestingAgentId: z.string().min(1).max(128),
+      expectedSessionId: z.string().min(1).max(128).optional()
+    }).strict().parse({
+      ...(typeof body === 'object' && body !== null ? body : {}),
+      requestId: decodeURIComponent(copilotAdviceMatch[1])
+    });
+    sendJson(response, 200, deviceActions.copilotAdvice(input));
+    return;
+  }
+
   if (request.method === 'POST' && url.pathname === '/v1/sessions/search') {
     const input = sessionSearchInputSchema.parse(await readJson(request));
     sendJson(response, 200, store.searchSessions(input));
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/v1/sessions/current/interventions/haptic') {
+    const input = backendHapticRequestSchema.parse(await readJson(request));
+    sendJson(response, 200, deviceActions.haptic(input));
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/v1/sessions/current/interventions/whisper') {
+    const input = backendWhisperRequestSchema.parse(await readJson(request));
+    sendJson(response, 200, deviceActions.whisper(input));
     return;
   }
 
@@ -198,6 +280,14 @@ async function route(
     const sessionId = decodeURIComponent(eventMatch[1]);
     if (!store.getSession(sessionId)) throw new Error(`Unknown session: ${sessionId}`);
     sendJson(response, 200, { sessionId, events: store.getEvents(sessionId) });
+    return;
+  }
+
+  const interventionsMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/interventions$/);
+  if (request.method === 'GET' && interventionsMatch) {
+    const sessionId = decodeURIComponent(interventionsMatch[1]);
+    if (!store.getSession(sessionId)) throw new Error(`Unknown session: ${sessionId}`);
+    sendJson(response, 200, { sessionId, interventions: store.getInterventions(sessionId) });
     return;
   }
 
@@ -275,4 +365,14 @@ function sendJson(response: ServerResponse, statusCode: number, value: unknown):
     'cache-control': 'no-store'
   });
   response.end(JSON.stringify(value));
+}
+
+function disabledCopilotAcknowledgement(eventId: string): EventAcknowledgement {
+  return {
+    eventId,
+    accepted: true,
+    duplicate: false,
+    receivedAt: new Date().toISOString(),
+    error: null
+  };
 }

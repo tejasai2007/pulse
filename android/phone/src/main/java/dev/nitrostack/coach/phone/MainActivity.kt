@@ -207,6 +207,35 @@ class MainActivity : ComponentActivity() {
                 StatusCard("Upload queue", vitals.pendingEvents.toString(), vitals.pendingEvents == 0, Modifier.weight(1f))
             }
 
+            if (BuildConfig.COPILOT_ENABLED) {
+                SectionLabel("CONVERSATION COPILOT")
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                if (vitals.copilotState == "completed") "Advice ready" else prettyStatus(vitals.copilotState),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                if (sessionActive) "Vitals access is consented for this session."
+                                else "Starts automatically with an active session.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        StatusPill(vitals.copilotState.uppercase(), vitals.copilotState == "completed")
+                    }
+                }
+            }
+
             SectionLabel("AUDIO & COACHING")
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -240,6 +269,17 @@ class MainActivity : ComponentActivity() {
                         enabled = permissionGranted,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)
                     ) { Text("Play coaching prompt") }
+                    OutlinedButton(
+                        onClick = pipeline::toggleExerciseMode,
+                        enabled = sessionActive,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)
+                    ) { Text(if (vitals.exerciseMode) "Stop exercise mode" else "Start exercise mode") }
+                    if (BuildConfig.DEBUG && BuildConfig.VITALS_SOURCE == "simulated") {
+                        OutlinedButton(
+                            onClick = { if (vitals.simulatorRunning) pipeline.stopSimulator() else pipeline.startSimulator() },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)
+                        ) { Text(if (vitals.simulatorRunning) "Stop simulated sequence" else "Run simulated sequence") }
+                    }
                 }
             }
 

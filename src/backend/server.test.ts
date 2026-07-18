@@ -23,6 +23,10 @@ const config: RuntimeConfig = {
   TRANSCRIPTION_MODE: 'fixture',
   DEVICE_ACTIONS: 'simulated',
   COPILOT_ENABLED: false,
+  COPILOT_MODE: 'automatic',
+  OPENAI_API_KEY: undefined,
+  OPENAI_MODEL: 'gpt-4.1-mini',
+  OPENAI_BASE_URL: 'https://api.openai.com/v1',
   STORE_RAW_AUDIO: false,
   DEEPGRAM_API_KEY: undefined
 };
@@ -79,6 +83,25 @@ describe('Phase 2 backend', () => {
     });
     const body = await response.json() as { duplicate: boolean };
     assert.equal(body.duplicate, true);
+  });
+
+  it('does not persist copilot traffic when the feature is disabled', async () => {
+    const event = {
+      version: '1.0',
+      type: 'advice_requested',
+      sessionId: 'disabled-copilot-session',
+      eventId: 'disabled-copilot-event',
+      timestamp: new Date().toISOString(),
+      correlationId: 'disabled-copilot-correlation',
+      payload: { requestId: 'disabled-copilot-request' }
+    };
+    const response = await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+    });
+    assert.equal(response.status, 202);
+    assert.equal((await response.json() as { accepted: boolean }).accepted, true);
+    assert.deepEqual(backend.store.getEvents(event.sessionId), []);
+    assert.equal(backend.store.getRequestedCopilotRequest(), undefined);
   });
 
   it('exposes ordered final segments for the current session', async () => {
@@ -326,6 +349,400 @@ describe('Phase 2 backend', () => {
     };
     assert.equal(latest.session.sessionId, sessionId);
     assert.equal(latest.segment.segmentId, 'segment-transcript-search');
+  });
+
+  it('consent-gates and deduplicates simulated haptic interventions', async () => {
+    const sessionId = 'session-phase-six-haptic';
+    const startedAt = new Date().toISOString();
+    const start = {
+      ...mockEventSequence[0],
+      sessionId,
+      eventId: 'event-phase-six-haptic-session',
+      timestamp: startedAt,
+      payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+    };
+    assert.equal((await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(start)
+    })).status, 202);
+
+    const denied = await fetch(`${baseUrl}/v1/sessions/current/interventions/haptic`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'haptic-retry', pattern: 'breathing', triggerEvidenceIds: [], requestingAgentId: 'test-agent'
+      })
+    });
+    assert.equal(denied.status, 409);
+    assert.match((await denied.json() as { error: string }).error, /Consent scope act:haptic is not granted/);
+
+    const grant = {
+      version: '1.0', type: 'consent_updated', sessionId, eventId: 'event-phase-six-haptic-consent',
+      timestamp: startedAt, correlationId: 'correlation-phase-six-haptic',
+      payload: { grantId: 'grant-phase-six-haptic', sessionId, scope: 'act:haptic', grantedAt: startedAt, revokedAt: null }
+    };
+    assert.equal((await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(grant)
+    })).status, 202);
+
+    const call = () => fetch(`${baseUrl}/v1/sessions/current/interventions/haptic`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'haptic-retry', pattern: 'breathing', triggerEvidenceIds: ['stress-1'], requestingAgentId: 'test-agent'
+      })
+    });
+    const first = await (await call()).json() as { intervention: { interventionId: string; deliveryResult: string }; duplicate: boolean };
+    const retry = await (await call()).json() as { intervention: { interventionId: string }; duplicate: boolean };
+    assert.equal(first.intervention.deliveryResult, 'delivered');
+    assert.equal(first.duplicate, false);
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.intervention.interventionId, first.intervention.interventionId);
+
+    const history = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/interventions`)).json() as { interventions: unknown[] };
+    assert.equal(history.interventions.length, 1);
+  });
+
+  it('queues unlimited whisper text until silence and stores it only as agent speech', async () => {
+    const sessionId = 'session-phase-six-whisper';
+    const startedAt = new Date().toISOString();
+    const text = Array.from({ length: 600 }, (_, index) => `coach${index}`).join(' ');
+    const events = [
+      {
+        ...mockEventSequence[0], sessionId, eventId: 'event-phase-six-whisper-session', timestamp: startedAt,
+        payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+      },
+      {
+        version: '1.0', type: 'consent_updated', sessionId, eventId: 'event-phase-six-whisper-consent',
+        timestamp: startedAt, correlationId: 'correlation-phase-six-whisper',
+        payload: { grantId: 'grant-phase-six-whisper', sessionId, scope: 'act:audio', grantedAt: startedAt, revokedAt: null }
+      },
+      {
+        ...mockEventSequence[2], sessionId, eventId: 'event-phase-six-recent-speech', timestamp: startedAt,
+        payload: {
+          ...mockEventSequence[2].payload, sessionId, segmentId: 'segment-phase-six-recent',
+          speaker: 'participant', text: 'I am still talking.', startMs: 0, endMs: 100, providerTimestamp: startedAt
+        }
+      }
+    ];
+    for (const event of events) {
+      assert.equal((await fetch(`${baseUrl}/v1/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+      })).status, 202);
+    }
+
+    const response = await fetch(`${baseUrl}/v1/sessions/current/interventions/whisper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'long-whisper', text, triggerEvidenceIds: ['segment-phase-six-recent'],
+        expiresInMs: 5_000, requestingAgentId: 'test-agent'
+      })
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as { intervention: { deliveryResult: string } }).intervention.deliveryResult, 'pending');
+
+    await new Promise((resolve) => setTimeout(resolve, 1_800));
+    const history = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/interventions`)).json() as {
+      interventions: Array<{ deliveryResult: string; generatedMessage: string }>;
+    };
+    assert.equal(history.interventions[0].deliveryResult, 'delivered');
+    assert.equal(history.interventions[0].generatedMessage, text);
+
+    const transcript = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/transcript`)).json() as {
+      segments: Array<{ speaker: string; text: string }>;
+    };
+    assert.deepEqual(transcript.segments.map(({ speaker }) => speaker), ['participant', 'agent']);
+    assert.equal(transcript.segments[1].text, text);
+
+    const now = new Date().toISOString();
+    const elapsedMs = Date.parse(now) - Date.parse(startedAt);
+    const recentSpeech = {
+      ...mockEventSequence[2], sessionId, eventId: 'event-phase-six-before-revocation', timestamp: now,
+      payload: {
+        ...mockEventSequence[2].payload, sessionId, segmentId: 'segment-phase-six-before-revocation',
+        speaker: 'wearer', text: 'Do not play over this.', startMs: elapsedMs, endMs: elapsedMs, providerTimestamp: now
+      }
+    };
+    await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(recentSpeech)
+    });
+    await fetch(`${baseUrl}/v1/sessions/current/interventions/whisper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'expired-whisper', text: 'This becomes stale.', triggerEvidenceIds: [],
+        expiresInMs: 1_000, requestingAgentId: 'test-agent'
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await fetch(`${baseUrl}/v1/sessions/current/interventions/whisper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'revoked-whisper', text: 'This must never play.', triggerEvidenceIds: [],
+        expiresInMs: 5_000, requestingAgentId: 'test-agent'
+      })
+    });
+    const revokedAt = new Date().toISOString();
+    const revocation = {
+      version: '1.0', type: 'consent_updated', sessionId, eventId: 'event-phase-six-whisper-revoked',
+      timestamp: revokedAt, correlationId: 'correlation-phase-six-revoked',
+      payload: { grantId: 'grant-phase-six-whisper', sessionId, scope: 'act:audio', grantedAt: startedAt, revokedAt }
+    };
+    await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(revocation)
+    });
+    const revokedHistory = await (await fetch(`${baseUrl}/v1/sessions/${sessionId}/interventions`)).json() as {
+      interventions: Array<{ deliveryResult: string }>;
+    };
+    assert.deepEqual(
+      revokedHistory.interventions.map(({ deliveryResult }) => deliveryResult),
+      ['delivered', 'expired', 'cancelled']
+    );
+  });
+});
+
+describe('Phase 8 conversation copilot', () => {
+  const copilotBackend = createBackend({ ...config, COPILOT_ENABLED: true, COPILOT_MODE: 'mcp' });
+  let baseUrl = '';
+
+  before(async () => {
+    await new Promise<void>((resolve) => copilotBackend.server.listen(0, '127.0.0.1', resolve));
+    const address = copilotBackend.server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  after(async () => {
+    copilotBackend.websocketServer.close();
+    await new Promise<void>((resolve, reject) => copilotBackend.server.close((error) => error ? reject(error) : resolve()));
+  });
+
+  it('deduplicates taps, claims one request, and delivers one grounded suggestion', async () => {
+    const sessionId = 'session-phase-eight';
+    const startedAt = new Date(Date.now() - 5_000).toISOString();
+    const start = {
+      ...mockEventSequence[0],
+      sessionId,
+      eventId: 'phase-eight-session',
+      timestamp: startedAt,
+      payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+    };
+    const context = {
+      version: '1.0', type: 'session_context_updated', sessionId, eventId: 'phase-eight-context',
+      timestamp: startedAt, correlationId: 'phase-eight-context-correlation',
+      payload: {
+        sessionId,
+        wearerSummary: 'Founder presenting a product plan.',
+        situation: 'Investor pitch',
+        participants: [{ name: 'Investor', role: 'decision maker' }],
+        goals: ['Mention the implementation timeline'],
+        topicsToAvoid: ['Unannounced customer names'],
+        stressSensitivity: { baselineOffsetBpm: 12, elevationTriggerMs: 5_000, recoveryTriggerMs: 3_000, cooldownMs: 10_000 }
+      }
+    };
+    const transcript = {
+      ...mockEventSequence[2], sessionId, eventId: 'phase-eight-transcript', timestamp: startedAt,
+      payload: {
+        ...mockEventSequence[2].payload, sessionId, segmentId: 'phase-eight-segment',
+        speaker: 'wearer', text: 'Our product reduces manual reporting.', startMs: 0, endMs: 500,
+        providerTimestamp: startedAt
+      }
+    };
+    const grants = ['read:context', 'read:transcript', 'act:audio'].map((scope) => ({
+      version: '1.0', type: 'consent_updated', sessionId, eventId: `phase-eight-grant-${scope}`,
+      timestamp: startedAt, correlationId: `phase-eight-grant-correlation-${scope}`,
+      payload: { grantId: `phase-eight-grant-${scope}`, sessionId, scope, grantedAt: startedAt, revokedAt: null }
+    }));
+    for (const event of [start, context, transcript, ...grants]) {
+      assert.equal((await fetch(`${baseUrl}/v1/events`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+      })).status, 202);
+    }
+
+    const tap = {
+      version: '1.0', type: 'advice_requested', sessionId, eventId: 'phase-eight-tap',
+      timestamp: new Date().toISOString(), correlationId: 'phase-eight-tap-correlation',
+      payload: { requestId: 'phase-eight-request' }
+    };
+    const sendTap = (event: unknown) => fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+    });
+    assert.equal((await sendTap(tap)).status, 202);
+    assert.equal((await (await sendTap(tap)).json() as { duplicate: boolean }).duplicate, true);
+    assert.equal((await sendTap({
+      ...tap, eventId: 'phase-eight-second-tap', payload: { requestId: 'phase-eight-second-request' }
+    })).status, 202);
+    assert.equal(copilotBackend.store.getActiveCopilotRequest(sessionId)?.requestId, 'phase-eight-request');
+
+    const pending = await (await fetch(`${baseUrl}/v1/copilot/requests/pending`)).json() as {
+      request: { requestId: string; state: string };
+    };
+    assert.equal(pending.request.requestId, 'phase-eight-request');
+    assert.equal(pending.request.state, 'thinking');
+
+    const adviceBody = {
+      text: 'Mention the implementation timeline next.',
+      triggerEvidenceIds: ['phase-eight-segment', 'context:goal:0'],
+      confidentialContextDirectlyUseful: true,
+      expiresInMs: 15_000,
+      requestingAgentId: 'acceptance-agent'
+    };
+    const ungrounded = await fetch(`${baseUrl}/v1/copilot/requests/phase-eight-request/advice`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...adviceBody, triggerEvidenceIds: ['invented-evidence'] })
+    });
+    assert.equal(ungrounded.status, 409);
+    assert.match((await ungrounded.json() as { error: string }).error, /Unknown copilot evidence/);
+    const deliver = () => fetch(`${baseUrl}/v1/copilot/requests/phase-eight-request/advice`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(adviceBody)
+    });
+    const deliveredResponse = await deliver();
+    assert.equal(deliveredResponse.status, 200);
+    const delivered = await deliveredResponse.json() as {
+      request: { state: string };
+      intervention: { interventionId: string; type: string; deliveryResult: string };
+      duplicate: boolean;
+    };
+    assert.equal(delivered.request.state, 'completed');
+    assert.equal(delivered.intervention.type, 'copilot_advice');
+    assert.equal(delivered.intervention.deliveryResult, 'delivered');
+    assert.equal(delivered.duplicate, false);
+
+    const retry = await (await deliver()).json() as { intervention: { interventionId: string }; duplicate: boolean };
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.intervention.interventionId, delivered.intervention.interventionId);
+    assert.equal(copilotBackend.store.getInterventions(sessionId).length, 1);
+  });
+
+  it('rejects ungrounded and over-limit advice', async () => {
+    const invalid = await fetch(`${baseUrl}/v1/copilot/requests/phase-eight-request/advice`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text: Array.from({ length: 21 }, (_, index) => `word${index}`).join(' '),
+        triggerEvidenceIds: [],
+        requestingAgentId: 'acceptance-agent'
+      })
+    });
+    assert.equal(invalid.status, 400);
+  });
+
+  it('expires a stale request before advice can be queued', async () => {
+    const staleTap = {
+      version: '1.0', type: 'advice_requested', sessionId: 'session-phase-eight',
+      eventId: 'phase-eight-stale-tap', timestamp: new Date(Date.now() - 31_000).toISOString(),
+      correlationId: 'phase-eight-stale-correlation', payload: { requestId: 'phase-eight-stale-request' }
+    };
+    assert.equal((await fetch(`${baseUrl}/v1/events`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(staleTap)
+    })).status, 202);
+    const pending = await (await fetch(`${baseUrl}/v1/copilot/requests/pending`)).json() as { request: unknown };
+    assert.equal(pending.request, null);
+    assert.equal(copilotBackend.store.getCopilotRequest('phase-eight-stale-request')?.state, 'expired');
+    assert.equal(copilotBackend.store.getInterventions('session-phase-eight').length, 1);
+  });
+});
+
+describe('Automatic conversation copilot', () => {
+  const automaticBackend = createBackend({
+    ...config,
+    COPILOT_ENABLED: true,
+    COPILOT_MODE: 'automatic',
+    OPENAI_API_KEY: 'test-openai-key',
+    OPENAI_BASE_URL: 'https://openai.test/v1'
+  });
+  let baseUrl = '';
+
+  before(async () => {
+    await new Promise<void>((resolve) => automaticBackend.server.listen(0, '127.0.0.1', resolve));
+    const address = automaticBackend.server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  after(async () => {
+    automaticBackend.websocketServer.close();
+    await new Promise<void>((resolve, reject) => automaticBackend.server.close((error) => error ? reject(error) : resolve()));
+  });
+
+  it('turns a watch request into OpenAI advice without an MCP claim', async () => {
+    const originalFetch = globalThis.fetch;
+    let openAiCalled = false;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) !== 'https://openai.test/v1/responses') return originalFetch(input, init);
+      openAiCalled = true;
+      assert.equal((init?.headers as Record<string, string>).authorization, 'Bearer test-openai-key');
+      const request = JSON.parse(String(init?.body)) as { model: string; store: boolean; input: string };
+      assert.equal(request.model, 'gpt-4.1-mini');
+      assert.equal(request.store, false);
+      assert.match(request.input, /We need to decide the implementation order/);
+      assert.match(request.input, /wordsPerMinute/);
+      assert.doesNotMatch(request.input, /wearerSummary|situation|goals/);
+      return new Response(JSON.stringify({
+        output: [{ content: [{ type: 'output_text', text: '{"advice":"Ask which implementation milestone matters most next."}' }] }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+
+    const sessionId = 'automatic-copilot-session';
+    const startedAt = new Date(Date.now() - 5_000).toISOString();
+    const events = [
+      {
+        ...mockEventSequence[0],
+        sessionId,
+        eventId: 'automatic-session',
+        timestamp: startedAt,
+        payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
+      },
+      {
+        ...mockEventSequence[2],
+        sessionId,
+        eventId: 'automatic-transcript',
+        timestamp: startedAt,
+        correlationId: 'automatic-transcript-correlation',
+        payload: {
+          ...mockEventSequence[2].payload,
+          sessionId,
+          segmentId: 'automatic-transcript-segment',
+          speaker: 'wearer',
+          text: 'We need to decide the implementation order.',
+          startMs: 0,
+          endMs: 1_000,
+          providerTimestamp: startedAt
+        }
+      },
+      ...['read:transcript', 'act:audio'].map((scope) => ({
+        version: '1.0', type: 'consent_updated', sessionId, eventId: `automatic-consent-${scope}`,
+        timestamp: startedAt, correlationId: `automatic-consent-correlation-${scope}`,
+        payload: { grantId: `automatic-consent-${scope}`, sessionId, scope, grantedAt: startedAt, revokedAt: null }
+      })),
+      {
+        version: '1.0', type: 'advice_requested', sessionId, eventId: 'automatic-request-event',
+        timestamp: new Date().toISOString(), correlationId: 'automatic-request-correlation',
+        payload: { requestId: 'automatic-request' }
+      }
+    ];
+
+    try {
+      for (const event of events) {
+        const response = await fetch(`${baseUrl}/v1/events`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event)
+        });
+        assert.equal(response.status, 202);
+      }
+
+      for (let attempt = 0; attempt < 20 && automaticBackend.store.getCopilotRequest('automatic-request')?.state !== 'completed'; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    const request = automaticBackend.store.getCopilotRequest('automatic-request');
+    assert.equal(openAiCalled, true);
+    assert.equal(request?.state, 'completed');
+    assert.equal(request?.advice, 'Ask which implementation milestone matters most next.');
+    assert.equal(automaticBackend.store.getInterventions(sessionId).length, 1);
+    const pending = await (await fetch(`${baseUrl}/v1/copilot/requests/pending`)).json() as { request: unknown };
+    assert.equal(pending.request, null);
   });
 });
 

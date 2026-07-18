@@ -24,7 +24,7 @@ Phone-to-backend delivery uses `/v1/session-stream`, a persistent WebSocket carr
 | --- | --- |
 | Watch to phone | `heart_rate_sample`, `heart_rate_availability`, `watch_status`, `session_action` |
 | Phone to watch | `session_state`, `haptic_command`, `connection_status` |
-| Phone to backend | `session_started`, `session_ended`, `session_context_updated`, `vital_sample_received`, `transcript_segment_received`, `audio_route_changed`, `consent_updated`, `playback_completed` |
+| Phone to backend | `session_started`, `session_ended`, `session_context_updated`, `vital_sample_received`, `transcript_segment_received`, `audio_route_changed`, `consent_updated`, `playback_completed`, `haptic_completed` |
 | Backend to phone | `play_tts`, `cancel_tts`, `send_watch_haptic`, `report_ready` |
 
 Changing a field or event requires a contract version change and coordinated producer/consumer updates. Unknown keys are rejected by TypeScript ingress validation.

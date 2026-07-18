@@ -2,11 +2,35 @@
   "version": "1.0.0",
   "widgets": [
     {
+      "uri": "/device-health-panel",
+      "name": "Device Health Panel",
+      "description": "Shows Pulse device, service, simulation, and fallback health.",
+      "examples": [
+        {
+          "name": "Live system",
+          "description": "Every device and service is connected.",
+          "data": { "session": { "sessionId": "live-001", "status": "active", "startedAt": "2026-07-17T10:00:00.000Z", "endedAt": null, "simulatedVitals": false, "audioInputRoute": "earbuds" }, "flags": { "simulatedVitals": false, "simulatedDeviceActions": false, "audioInput": "earbuds", "transcriptionMode": "cloud", "activeFallbacks": [] }, "watch": { "state": "connected", "mode": "live", "detail": "Watch connected; sensor available", "checkedAt": "2026-07-17T10:00:00.000Z" }, "phone": { "state": "connected", "mode": "live", "detail": "Phone app active", "checkedAt": "2026-07-17T10:00:00.000Z" }, "earbuds": { "state": "connected", "mode": "live", "detail": "Communication route: Pixel Buds", "checkedAt": "2026-07-17T10:00:00.000Z" }, "microphone": { "state": "connected", "mode": "live", "detail": "Capturing from Pixel Buds", "checkedAt": "2026-07-17T10:00:00.000Z" }, "transcriptionProvider": { "state": "connected", "mode": "live", "detail": "Deepgram stream connected", "checkedAt": "2026-07-17T10:00:00.000Z" }, "backend": { "state": "connected", "mode": "live", "detail": "Backend device-status endpoint reachable", "checkedAt": "2026-07-17T10:00:00.000Z" }, "agentAccess": { "state": "connected", "mode": "live", "detail": "MCP server successfully handled get_device_status", "checkedAt": "2026-07-17T10:00:00.000Z" } }
+        },
+        {
+          "name": "Demo fallbacks",
+          "description": "Simulated vitals and actions with phone microphone and fixture transcription.",
+          "data": { "session": { "sessionId": "demo-001", "status": "active", "startedAt": "2026-07-17T10:00:00.000Z", "endedAt": null, "simulatedVitals": true, "audioInputRoute": "phone" }, "flags": { "simulatedVitals": true, "simulatedDeviceActions": true, "audioInput": "phone", "transcriptionMode": "fixture", "activeFallbacks": ["phone_microphone", "fixture_transcription"] }, "watch": { "state": "connected", "mode": "simulated", "detail": "Simulated vitals selected", "checkedAt": "2026-07-17T10:00:00.000Z" }, "phone": { "state": "connected", "mode": "live", "detail": "Phone app active", "checkedAt": "2026-07-17T10:00:00.000Z" }, "earbuds": { "state": "degraded", "mode": "fallback", "detail": "Phone-mic fallback active", "checkedAt": "2026-07-17T10:00:00.000Z" }, "microphone": { "state": "connected", "mode": "fallback", "detail": "Capturing from Phone microphone", "checkedAt": "2026-07-17T10:00:00.000Z" }, "transcriptionProvider": { "state": "connected", "mode": "fallback", "detail": "Fixture transcription selected", "checkedAt": "2026-07-17T10:00:00.000Z" }, "backend": { "state": "connected", "mode": "live", "detail": "Backend device-status endpoint reachable", "checkedAt": "2026-07-17T10:00:00.000Z" }, "agentAccess": { "state": "connected", "mode": "live", "detail": "MCP server successfully handled get_device_status", "checkedAt": "2026-07-17T10:00:00.000Z" } }
+        },
+        {
+          "name": "Offline devices",
+          "description": "Tests stale reporting and unavailable capture paths.",
+          "data": { "session": { "sessionId": "offline-001", "status": "active", "startedAt": "2026-07-17T09:00:00.000Z", "endedAt": null, "simulatedVitals": false, "audioInputRoute": "earbuds" }, "flags": { "simulatedVitals": false, "simulatedDeviceActions": false, "audioInput": "earbuds", "transcriptionMode": "cloud", "activeFallbacks": [] }, "watch": { "state": "offline", "mode": "live", "detail": "Watch disconnected", "checkedAt": "2026-07-17T09:59:30.000Z" }, "phone": { "state": "offline", "mode": "live", "detail": "No phone status update for more than 15 seconds", "checkedAt": "2026-07-17T09:59:30.000Z" }, "earbuds": { "state": "unavailable", "mode": "unavailable", "detail": "No communication device available", "checkedAt": "2026-07-17T09:59:30.000Z" }, "microphone": { "state": "unavailable", "mode": "unavailable", "detail": "Microphone permission denied", "checkedAt": "2026-07-17T09:59:30.000Z" }, "transcriptionProvider": { "state": "unavailable", "mode": "unavailable", "detail": "DEEPGRAM_API_KEY is missing", "checkedAt": "2026-07-17T09:59:30.000Z" }, "backend": { "state": "connected", "mode": "live", "detail": "Backend device-status endpoint reachable", "checkedAt": "2026-07-17T10:00:00.000Z" }, "agentAccess": { "state": "connected", "mode": "live", "detail": "MCP server successfully handled get_device_status", "checkedAt": "2026-07-17T10:00:00.000Z" } }
+        }
+      ],
+      "tags": ["pulse", "health", "devices", "connectivity"]
+    },
+    {
       "uri": "/session-report",
       "name": "Session timeline",
       "description": "Scrub heart rate and transcript evidence on one synchronized timeline.",
       "examples": [],
       "tags": ["session", "vitals", "transcript"]
     }
-  ]
+  ],
+  "generatedAt": "2026-07-17T00:00:00.000Z"
 }

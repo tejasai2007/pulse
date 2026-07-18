@@ -1,6 +1,6 @@
 # Pulse
 
-Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Phase 5 adds deterministic stored-session reports and an MCP timeline widget that aligns heart rate with transcript evidence. The Phase 0 audio and haptic probes remain available for device validation.
+Pulse is a NitroStack MCP server plus watch, phone, and backend foundations for exposing consent-scoped physiological and conversational state to agents. Conversation Copilot adds optional, watch-requested advice through the existing consent-gated audio path. The Phase 0 audio and haptic probes remain available for device validation.
 
 ## Components
 
@@ -49,6 +49,8 @@ npm run mock:events
 ```
 
 Sessions persist at `DATABASE_PATH=data/pulse.sqlite` by default. MCP agents can read `session://current/transcript`, `session://latest/transcript`, `session://current/speech-metrics`, `session://current/vitals`, and `session://current/stress`. They can call `search_sessions`, read `session://{sessionId}/report`, or call `generate_session_report` to render the synchronized report widget in a supporting MCP client.
+
+Conversation Copilot is enabled by default. Set `COPILOT_MODE=automatic`, `DEVICE_ACTIONS=real`, and `OPENAI_API_KEY` on the backend to generate conversation advice directly with OpenAI and play it on the phone without MCP. Keep the API key on the backend; never add it to the Android build. `OPENAI_MODEL` defaults to `gpt-4.1-mini`. Starting a phone session automatically grants session-scoped `read:transcript` and `act:audio` consent, and ending it revokes both. A watch `Ask copilot` tap sends the latest 20 transcript segments, speech metrics, and consented stress/vital summaries to OpenAI with response storage disabled, then queues its concise advice through the existing audio path. If OpenAI is unavailable, the backend falls back to metric-based advice. Set `COPILOT_ENABLED=false` to disable the feature or `COPILOT_MODE=mcp` to use an MCP host instead.
 
 `session://current/vitals` returns the latest BPM, availability, source, freshness, and a rolling window capped at 30 samples. `session://current/stress` returns the backend-derived stress state, baseline, delta, elevation duration, and cooldown. Both resources require a current calibrating or active session and an active `read:vitals` consent grant; authenticated callers must also carry `read:vitals`, and session-bound callers must match the current session.
 

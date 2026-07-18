@@ -45,6 +45,11 @@ class WatchDataService : WearableListenerService() {
                         backendConnected = payload.getBoolean("backendConnected")
                     )
                 }
+                path == PulseDataLayer.COPILOT_STATE_PATH -> {
+                    val eventJson = data.getString(PulseDataLayer.EVENT_JSON) ?: return@forEach
+                    val envelope = PulseContract.validateEnvelope(eventJson)
+                    WatchStateStore.updateCopilotState(this, envelope.getJSONObject("payload").getString("state"))
+                }
                 path.startsWith(PulseDataLayer.VITAL_ACK_PREFIX) -> {
                     val eventId = data.getString(PulseDataLayer.ACK_EVENT_ID) ?: return@forEach
                     WatchStateStore.acknowledge(this, eventId)
@@ -62,6 +67,17 @@ class WatchDataService : WearableListenerService() {
                     val dataClient = Wearable.getDataClient(this)
                     dataClient.getDataItems().addOnSuccessListener { items ->
                         items.filter { it.uri.path == PulseDataLayer.sessionActionPath(eventId) }
+                            .forEach { dataClient.deleteDataItems(it.uri) }
+                        items.release()
+                    }
+                    dataClient.deleteDataItems(event.dataItem.uri)
+                }
+                path.startsWith(PulseDataLayer.ADVICE_REQUEST_ACK_PREFIX) -> {
+                    val eventId = data.getString(PulseDataLayer.ACK_EVENT_ID) ?: return@forEach
+                    WatchStateStore.acknowledge(this, eventId)
+                    val dataClient = Wearable.getDataClient(this)
+                    dataClient.getDataItems().addOnSuccessListener { items ->
+                        items.filter { it.uri.path == PulseDataLayer.adviceRequestPath(eventId) }
                             .forEach { dataClient.deleteDataItems(it.uri) }
                         items.release()
                     }
