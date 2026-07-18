@@ -395,6 +395,8 @@ export class EventStore {
 
   hasCopilotEvidence(sessionId: string, evidenceId: string): boolean {
     if (evidenceId === 'speech-metrics:current') return this.getSpeechMetrics(sessionId) !== undefined;
+    if (evidenceId === 'stress:current') return this.getStressSignal(sessionId) !== undefined;
+    if (evidenceId === 'vitals:current') return this.getVitalSamples(sessionId).length > 0;
     if (evidenceId === 'context:situation') return this.getContext(sessionId) !== undefined;
     const goal = evidenceId.match(/^context:goal:(\d+)$/);
     if (goal) return this.getContext(sessionId)?.goals[Number(goal[1])] !== undefined;

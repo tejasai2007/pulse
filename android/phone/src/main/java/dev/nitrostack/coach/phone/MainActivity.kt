@@ -18,7 +18,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -63,8 +62,6 @@ class MainActivity : ComponentActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
             )
         }
-        var copilotSituation by remember { mutableStateOf("") }
-        var copilotGoal by remember { mutableStateOf("") }
         val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             permissionGranted = it[Manifest.permission.RECORD_AUDIO] == true && it[Manifest.permission.BLUETOOTH_CONNECT] == true
         }
@@ -89,20 +86,8 @@ class MainActivity : ComponentActivity() {
                     else "Conversation copilot: ${vitals.copilotState}",
                     style = MaterialTheme.typography.titleMedium
                 )
-                OutlinedTextField(
-                    value = copilotSituation,
-                    onValueChange = { copilotSituation = it },
-                    label = { Text("Conversation situation") },
-                    enabled = !vitals.copilotConsented
-                )
-                OutlinedTextField(
-                    value = copilotGoal,
-                    onValueChange = { copilotGoal = it },
-                    label = { Text("Point or goal to mention") },
-                    enabled = !vitals.copilotConsented
-                )
                 Button(
-                    onClick = { pipeline.configureCopilot(copilotSituation, copilotGoal, !vitals.copilotConsented) },
+                    onClick = { pipeline.configureCopilot(!vitals.copilotConsented) },
                     enabled = vitals.sessionStatus == "active"
                 ) { Text(if (vitals.copilotConsented) "Disable copilot" else "Enable copilot") }
                 if (vitals.sessionStatus != "active") Text("Start a session to enable copilot.")

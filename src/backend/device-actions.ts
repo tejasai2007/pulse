@@ -228,38 +228,44 @@ export class DeviceActions {
   }
 
   private async processCopilotRequest(request: CopilotRequest): Promise<void> {
-    const context = this.store.getContext(request.sessionId);
-    if (!context || !this.store.hasActiveConsent(request.sessionId, 'read:context') ||
-      !this.store.hasActiveConsent(request.sessionId, 'read:transcript') ||
+    if (!this.store.hasActiveConsent(request.sessionId, 'read:transcript') ||
       !this.store.hasActiveConsent(request.sessionId, 'act:audio')) {
       this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, 'failed'));
       return;
     }
 
     const transcript = this.store.getTranscriptSegments(request.sessionId).slice(-20);
-    const spoken = transcript.map(({ text }) => text.toLocaleLowerCase()).join(' ');
-    const goalIndex = context.goals.findIndex((goal) => !spoken.includes(goal.toLocaleLowerCase()));
-    const selectedGoalIndex = goalIndex >= 0 ? goalIndex : context.goals.length > 0 ? 0 : -1;
-    const goal = selectedGoalIndex >= 0 ? context.goals[selectedGoalIndex] : undefined;
-    const goalWords = goal?.trim().split(/\s+/u).slice(0, 18) ?? [];
-    const fallback = goalWords.length > 0
-      ? `Next, mention ${goalWords.join(' ')}`
-      : 'Pause, listen, and ask one clear follow-up question.';
+    const speechMetrics = this.store.getSpeechMetrics(request.sessionId);
+    if (!speechMetrics) {
+      this.broadcastCopilotState(this.store.updateCopilotRequest(request.requestId, 'failed'));
+      return;
+    }
+    const vitalsAllowed = this.store.hasActiveConsent(request.sessionId, 'read:vitals');
+    const stress = vitalsAllowed ? this.store.getStressSignal(request.sessionId) : undefined;
+    const latestVital = vitalsAllowed ? this.store.getVitalSamples(request.sessionId).at(-1) : undefined;
+    const fallback = speechMetrics.wordsPerMinute > 160
+      ? 'Slow down and make your next point concise.'
+      : speechMetrics.longestTurnMs > 30_000
+        ? 'Pause and invite the other person to respond.'
+        : transcript.length > 0
+          ? 'Address the latest point with one clear follow-up question.'
+          : 'Listen first, then ask one clear follow-up question.';
     const evidenceIds = [
-      'context:situation',
-      ...context.goals.map((_, index) => `context:goal:${index}`),
+      'speech-metrics:current',
+      ...(stress ? ['stress:current'] : []),
+      ...(latestVital ? ['vitals:current'] : []),
       ...transcript.map(({ segmentId }) => segmentId)
     ];
 
     const thinking = this.store.updateCopilotRequest(request.requestId, 'thinking');
     this.broadcastCopilotState(thinking);
     try {
-      const text = await this.generateOpenAiAdvice(context, transcript, fallback);
+      const text = await this.generateOpenAiAdvice(transcript, speechMetrics, stress, latestVital, fallback);
       this.copilotAdvice({
         requestId: request.requestId,
         text,
         triggerEvidenceIds: evidenceIds,
-        confidentialContextDirectlyUseful: true,
+        confidentialContextDirectlyUseful: false,
         expiresInMs: 15_000,
         requestingAgentId: 'backend-openai-copilot'
       });
@@ -278,8 +284,10 @@ export class DeviceActions {
   }
 
   private async generateOpenAiAdvice(
-    context: NonNullable<ReturnType<EventStore['getContext']>>,
     transcript: ReturnType<EventStore['getTranscriptSegments']>,
+    speechMetrics: NonNullable<ReturnType<EventStore['getSpeechMetrics']>>,
+    stress: ReturnType<EventStore['getStressSignal']>,
+    latestVital: ReturnType<EventStore['getVitalSamples']>[number] | undefined,
     fallback: string
   ): Promise<string> {
     if (!this.config.OPENAI_API_KEY) return fallback;
@@ -295,16 +303,24 @@ export class DeviceActions {
           model: this.config.OPENAI_MODEL,
           store: false,
           max_output_tokens: 80,
-          instructions: 'Give one immediately actionable conversation suggestion using only the supplied evidence. Use at most 20 words. Prefer an unsaid goal. Do not reveal private context unless necessary. Return JSON only.',
+          instructions: 'Give one immediately actionable conversation suggestion using only the supplied transcript and metrics. Use at most 20 words. Do not invent facts. Return JSON only.',
           input: JSON.stringify({
-            context: {
-              wearerSummary: context.wearerSummary,
-              situation: context.situation,
-              participants: context.participants,
-              goals: context.goals,
-              topicsToAvoid: context.topicsToAvoid
+            recentTranscript: transcript.map(({ segmentId, speaker, text }) => ({ segmentId, speaker, text })),
+            speechMetrics: {
+              wordsPerMinute: speechMetrics.wordsPerMinute,
+              longestTurnMs: speechMetrics.longestTurnMs,
+              currentSilenceMs: speechMetrics.currentSilenceMs
             },
-            recentTranscript: transcript.map(({ segmentId, speaker, text }) => ({ segmentId, speaker, text }))
+            stress: stress ? {
+              state: stress.state,
+              currentDeltaBpm: stress.currentDeltaBpm,
+              elevationDurationMs: stress.elevationDurationMs
+            } : null,
+            latestVital: latestVital ? {
+              bpm: latestVital.bpm,
+              availability: latestVital.availability,
+              source: latestVital.source
+            } : null
           }),
           text: {
             format: {

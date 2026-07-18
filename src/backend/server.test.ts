@@ -675,9 +675,11 @@ describe('Automatic conversation copilot', () => {
       const request = JSON.parse(String(init?.body)) as { model: string; store: boolean; input: string };
       assert.equal(request.model, 'gpt-4.1-mini');
       assert.equal(request.store, false);
-      assert.match(request.input, /Explain the implementation timeline/);
+      assert.match(request.input, /We need to decide the implementation order/);
+      assert.match(request.input, /wordsPerMinute/);
+      assert.doesNotMatch(request.input, /wearerSummary|situation|goals/);
       return new Response(JSON.stringify({
-        output: [{ content: [{ type: 'output_text', text: '{"advice":"Connect the timeline to the project outcome next."}' }] }]
+        output: [{ content: [{ type: 'output_text', text: '{"advice":"Ask which implementation milestone matters most next."}' }] }]
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch;
 
@@ -692,19 +694,23 @@ describe('Automatic conversation copilot', () => {
         payload: { session: { ...mockEventSequence[0].payload.session, sessionId, status: 'active', startedAt } }
       },
       {
-        version: '1.0', type: 'session_context_updated', sessionId, eventId: 'automatic-context',
-        timestamp: startedAt, correlationId: 'automatic-context-correlation',
+        ...mockEventSequence[2],
+        sessionId,
+        eventId: 'automatic-transcript',
+        timestamp: startedAt,
+        correlationId: 'automatic-transcript-correlation',
         payload: {
+          ...mockEventSequence[2].payload,
           sessionId,
-          wearerSummary: '',
-          situation: 'Project update',
-          participants: [],
-          goals: ['Explain the implementation timeline'],
-          topicsToAvoid: [],
-          stressSensitivity: { baselineOffsetBpm: 12, elevationTriggerMs: 5_000, recoveryTriggerMs: 3_000, cooldownMs: 10_000 }
+          segmentId: 'automatic-transcript-segment',
+          speaker: 'wearer',
+          text: 'We need to decide the implementation order.',
+          startMs: 0,
+          endMs: 1_000,
+          providerTimestamp: startedAt
         }
       },
-      ...['read:context', 'read:transcript', 'act:audio'].map((scope) => ({
+      ...['read:transcript', 'act:audio'].map((scope) => ({
         version: '1.0', type: 'consent_updated', sessionId, eventId: `automatic-consent-${scope}`,
         timestamp: startedAt, correlationId: `automatic-consent-correlation-${scope}`,
         payload: { grantId: `automatic-consent-${scope}`, sessionId, scope, grantedAt: startedAt, revokedAt: null }
@@ -733,7 +739,7 @@ describe('Automatic conversation copilot', () => {
     const request = automaticBackend.store.getCopilotRequest('automatic-request');
     assert.equal(openAiCalled, true);
     assert.equal(request?.state, 'completed');
-    assert.equal(request?.advice, 'Connect the timeline to the project outcome next.');
+    assert.equal(request?.advice, 'Ask which implementation milestone matters most next.');
     assert.equal(automaticBackend.store.getInterventions(sessionId).length, 1);
     const pending = await (await fetch(`${baseUrl}/v1/copilot/requests/pending`)).json() as { request: unknown };
     assert.equal(pending.request, null);

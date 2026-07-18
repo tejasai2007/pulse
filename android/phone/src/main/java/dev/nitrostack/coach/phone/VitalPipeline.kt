@@ -183,7 +183,7 @@ class VitalPipeline(
         val sessionId = mutableState.value.sessionId ?: return
         if (mutableState.value.sessionStatus !in setOf("calibrating", "active")) return
         stopSimulator()
-        if (mutableState.value.copilotConsented) configureCopilot("", "", false)
+        if (mutableState.value.copilotConsented) configureCopilot(false)
         highHeartRateAlertGate.reset()
         val endedAt = Instant.now().toString()
         enqueue(PulseContract.envelope(
@@ -309,36 +309,14 @@ class VitalPipeline(
         return true
     }
 
-    fun configureCopilot(situation: String, goal: String, enabled: Boolean) {
+    fun configureCopilot(enabled: Boolean) {
         if (!BuildConfig.COPILOT_ENABLED) return
         val sessionId = mutableState.value.sessionId ?: return
         if (mutableState.value.sessionStatus != "active") return
         val now = Instant.now().toString()
-        if (enabled) {
-            if (situation.isBlank() || goal.isBlank()) {
-                reportMessage("Enter a situation and goal before enabling copilot")
-                return
-            }
-            enqueue(PulseContract.envelope(
-                type = "session_context_updated",
-                sessionId = sessionId,
-                payload = JSONObject()
-                    .put("sessionId", sessionId)
-                    .put("wearerSummary", "")
-                    .put("situation", situation.trim())
-                    .put("participants", JSONArray())
-                    .put("goals", JSONArray().put(goal.trim()))
-                    .put("topicsToAvoid", JSONArray())
-                    .put("stressSensitivity", JSONObject()
-                        .put("baselineOffsetBpm", 12)
-                        .put("elevationTriggerMs", 5_000)
-                        .put("recoveryTriggerMs", 3_000)
-                        .put("cooldownMs", 10_000))
-            ))
-            prefs.edit().putString("copilot_granted_at", now).apply()
-        }
+        if (enabled) prefs.edit().putString("copilot_granted_at", now).apply()
         val grantedAt = if (enabled) now else prefs.getString("copilot_granted_at", now) ?: now
-        listOf("read:context", "read:transcript", "act:audio").forEach { scopeName ->
+        listOf("read:transcript", "act:audio").forEach { scopeName ->
             enqueue(PulseContract.envelope(
                 type = "consent_updated",
                 sessionId = sessionId,
